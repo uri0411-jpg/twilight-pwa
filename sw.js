@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 // 🔴 BUMP THIS ON EVERY DEPLOY (twl-v3, twl-v4, ...)
-const CACHE_NAME  = 'twl-v28';  // bumped: Phase 3 physics — 5λ spectrum, Belt-of-Venus, ozone, goldenWindow fix
+const CACHE_NAME  = 'twl-v29';  // bumped: auto-seed learning data on first launch
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 250;         // ~6MB at ~25KB/tile — enough for region + new spot
 
@@ -51,7 +51,8 @@ const STATIC_ASSETS = [
   './js/render/skyCanvas.js',
   './js/render/sunDisk.js',
   './js/render/crepuscularRays.js',
-  './js/data/environment.js'
+  './js/data/environment.js',
+  './learning-seed.json'
 ];
 
 const API_PATTERNS = [

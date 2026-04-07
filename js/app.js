@@ -14,6 +14,7 @@ import { showToast, showLoading }              from './ui.js';
 import { registerSW }                          from './sw-register.js';
 import { clearExpired, getCacheAge }           from './cache.js';
 import { recordPrediction, fetchActualForDate, getUnfilledDates, processLearningForEntry } from './calibration.js';
+import { seedFromBacktest, getLearningStats }  from './engine/learningEngine.js';
 import { initInstallPrompt }                   from './install-prompt.js';
 import { rearmSavedAlerts }                    from './notifications.js';
 
@@ -86,6 +87,26 @@ async function boot() {
   document.addEventListener('visibilitychange', handleVisibilityChange);
 }
 
+// ─────────────────────────────────────────
+//  Auto-seed learning engine on first launch
+//  Runs only if sampleSize < 50 (new install or after clear)
+//  learning-seed.json is precached by the SW → works offline too
+// ─────────────────────────────────────────
+async function autoSeedIfNeeded() {
+  try {
+    if (getLearningStats().sampleSize >= 50) return; // already trained
+    const res = await fetch('./learning-seed.json');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data.entries)) return;
+    // Already sorted oldest-first in the file — no re-sort needed
+    const result = seedFromBacktest(data.entries);
+    console.log(`[boot] auto-seed: +${result.added} entries, total ${result.total}`);
+  } catch (e) {
+    console.warn('[boot] auto-seed skipped:', e.message);
+  }
+}
+
 async function loadAppData() {
   const saved = loadLocation();
   if (saved) {
@@ -99,6 +120,8 @@ async function loadAppData() {
     _city = await fetchCityName(_loc.lat, _loc.lon);
     saveLocation(_loc.lat, _loc.lon, _city);
   }
+
+  await autoSeedIfNeeded();
 
   const [weather, airQ, westData, nearbySpots] = await Promise.all([
     fetchWeek(_loc.lat, _loc.lon),
