@@ -6,6 +6,15 @@
 export function registerSW() {
   if (!('serviceWorker' in navigator)) return;
 
+  // Auto-reload when a new SW takes control (after skipWaiting + clients.claim)
+  let _reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (_reloaded) return;
+    _reloaded = true;
+    console.log('[SW] New controller — reloading');
+    location.reload();
+  });
+
   window.addEventListener('load', async () => {
     try {
       // Use relative path so it works on any subpath (e.g. /twilight-pwa/)
