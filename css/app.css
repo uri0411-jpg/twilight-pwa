@@ -19,6 +19,10 @@
   --r-card:        18px;
   --r-pill:        50px;
   --font-title:    'Secular One', 'Rubik', sans-serif;
+  /* Glass dynamics — updated by updateDynamicGradient() for score-adaptive transparency */
+  --glass-blur:     8px;
+  --glass-alpha:    0.57;
+  --glass-saturate: 120%;
   --font-body:     'Rubik', 'Heebo', sans-serif;
   --font-spot:     'Playfair Display', serif;
 }
@@ -86,6 +90,8 @@ body {
 body.has-install-banner .screen { padding-top: 56px; }
 
 /* ─── BOTTOM NAV ─── */
+/* --ui-sky-t: 0 = dark sky/night, 1 = bright golden hour — set by main-screen.js */
+:root { --ui-sky-t: 0.5; }
 .bottom-nav {
   position: fixed;
   bottom: 20px;
@@ -102,6 +108,9 @@ body.has-install-banner .screen { padding-top: 56px; }
     0 8px 32px rgba(0,0,0,0.55),
     0 0 0 1px rgba(255,200,100,0.06);
   width: min(360px, 90vw);
+  /* Blur softens during dark sky (no point blurring near-black background) */
+  backdrop-filter: blur(calc(6px + (1 - var(--ui-sky-t)) * 8px));
+  -webkit-backdrop-filter: blur(calc(6px + (1 - var(--ui-sky-t)) * 8px));
 }
 .nav-item {
   flex: 1;
@@ -111,6 +120,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   gap: 3px;
   cursor: pointer;
   padding: 6px 4px;
+  min-height: 44px;
   border-radius: 24px;
   transition: all 0.2s;
   -webkit-tap-highlight-color: transparent;
@@ -139,10 +149,12 @@ body.has-install-banner .screen { padding-top: 56px; }
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
 }
 .glass-strong {
-  background: rgba(22,11,4,0.57);
+  background: rgba(22,11,4,var(--glass-alpha));
   border: 1px solid rgba(212,165,116,0.30);
   border-radius: var(--r-card);
   box-shadow: 0 6px 28px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,200,100,0.07);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 /* ─── BUTTONS ─── */
@@ -218,8 +230,8 @@ body.has-install-banner .screen { padding-top: 56px; }
 }
 .range-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--gold-light);
   border: 2px solid #fff;
@@ -227,8 +239,8 @@ body.has-install-banner .screen { padding-top: 56px; }
   cursor: pointer;
 }
 .range-slider::-moz-range-thumb {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--gold-light);
   border: 2px solid #fff;
@@ -346,6 +358,14 @@ body.has-install-banner .screen { padding-top: 56px; }
 /* ═══════════════════════════════════════════
    MAIN SCREEN
 ═══════════════════════════════════════════ */
+/* Register --dyn-bg-* as typed properties so CSS transitions can animate them.
+   Without @property, custom properties are opaque strings — not animatable. */
+@property --dyn-bg-top    { syntax: '<color>'; initial-value: rgba(30,8,0,0.35);    inherits: true; }
+@property --dyn-bg-mid    { syntax: '<color>'; initial-value: rgba(55,15,0,0.30);   inherits: true; }
+@property --dyn-bg-belt   { syntax: '<color>'; initial-value: rgba(40,10,30,0.00);  inherits: true; }
+@property --dyn-bg-earth  { syntax: '<color>'; initial-value: rgba(5,3,8,0.60);     inherits: true; }
+@property --dyn-bg-bottom { syntax: '<color>'; initial-value: rgba(10,4,0,0.97);    inherits: true; }
+
 /* Dynamic gradient CSS vars — set by renderSkyGradient() / updateDynamicGradient() */
 :root {
   --dyn-bg-top:    rgba(30, 8, 0, 0.35);   /* zenith — Rayleigh blue/violet */
@@ -364,15 +384,23 @@ body.has-install-banner .screen { padding-top: 56px; }
   gap: 14px;
   min-height: 100%;
   /* Physics-driven 5-stop sky gradient overlay on the background image.
+     oklch interpolation avoids sRGB Mach banding at amber→pink→purple transitions.
      Stops: zenith → mid-sky → Belt-of-Venus arch → earth-shadow → ground. */
   background: linear-gradient(
-    180deg,
+    in oklch 180deg,
     var(--dyn-bg-top)    0%,
     var(--dyn-bg-mid)    25%,
     var(--dyn-bg-belt)   55%,
     var(--dyn-bg-earth)  80%,
     var(--dyn-bg-bottom) 100%
   );
+  /* Smooth sky evolution between 30-second gradient ticks (requires @property above) */
+  transition:
+    --dyn-bg-top    8s ease-in-out,
+    --dyn-bg-mid    8s ease-in-out,
+    --dyn-bg-belt   8s ease-in-out,
+    --dyn-bg-earth  8s ease-in-out,
+    --dyn-bg-bottom 8s ease-in-out;
 }
 
 /* ─── Palette Strip (Pulse 3 — informational, replaces decision banner) ─── */
@@ -676,6 +704,102 @@ body.has-install-banner .screen { padding-top: 56px; }
   color: var(--gold-light);
   font-weight: 600;
   text-align: center;
+}
+/* Score trajectory sparkline */
+.score-sparkline-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 14px 4px;
+  overflow: hidden;
+}
+.score-sparkline {
+  display: block;
+  width: 100%;
+  height: 36px;
+  overflow: visible;
+}
+.sparkline-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--cream-faint);
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+/* Atmospheric palette name — surfaced from the physics palette system */
+.palette-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--gold-light);
+  opacity: 0.78;
+  margin-top: 3px;
+  text-align: center;
+}
+
+/* ── Tier-2 score explainer tray ─────────────────────────────────────────── */
+.score-explainer {
+  padding: 12px 14px 8px;
+  border-top: 1px solid rgba(245, 224, 190, 0.10);
+  margin-top: 4px;
+  animation: fadeSlideDown 0.22s ease both;
+}
+.score-explainer[hidden] { display: none; }
+
+@keyframes fadeSlideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.explainer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  direction: rtl;
+}
+.explainer-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cream-faint);
+  width: 52px;
+  flex-shrink: 0;
+  text-align: right;
+}
+.explainer-bar-track {
+  flex: 1;
+  height: 5px;
+  background: rgba(245, 224, 190, 0.10);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.explainer-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.explainer-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cream-faint);
+  width: 32px;
+  text-align: left;
+}
+.explainer-model {
+  font-size: 10px;
+  color: rgba(245, 224, 190, 0.45);
+  text-align: center;
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+}
+
+/* Subtle ring when explainer is open */
+.gauge-explainer-open {
+  outline: 1px solid rgba(245, 184, 74, 0.20);
+  outline-offset: 4px;
+  border-radius: 50%;
 }
 
 /* Trend badge */
@@ -2464,4 +2588,69 @@ a:focus-visible,
     animation-duration: 0.8s !important;
     animation-iteration-count: infinite !important;
   }
+  /* Remove decorative glow halos entirely — they're purely visual, not informational */
+  .score-gauge-wrap::before { display: none !important; }
+}
+
+/* ═══════════════════════════════════════════
+   NIGHT VISION MODE
+   Auto-engages when solar elevation < -2° + 2 min on screen.
+   Reduces bright gold/cream elements to protect dark-adapted eyes.
+   Red-tinted indicator because red light preserves night vision.
+═══════════════════════════════════════════ */
+body.night-vision {
+  --gold:          #7A3E00;
+  --gold-light:    #9B5200;
+  --cream:         rgba(245, 220, 180, 0.52);
+  --cream-dim:     rgba(245, 220, 180, 0.38);
+  --cream-faint:   rgba(245, 220, 180, 0.25);
+  --glass-alpha:   0.76;
+  --glass-blur:    6px;
+}
+body.night-vision .score-badge       { filter: brightness(0.45); }
+body.night-vision .score-gauge-wrap::before { opacity: 0.2 !important; }
+body.night-vision .home-title        { opacity: 0.55; }
+body.night-vision .bottom-nav        { background: rgba(8,3,1,0.96); }
+
+/* ─── QUICK ALERT FAB ─── */
+.quick-alert-fab {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); /* 12px above bottom nav */
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, var(--gold), #E8A020);
+  color: #1A0A02;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 12px 26px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 190;
+  box-shadow: 0 4px 20px rgba(212,130,10,0.45), 0 2px 8px rgba(0,0,0,0.4);
+  cursor: pointer;
+  white-space: nowrap;
+  animation: slideUp 0.3s ease both;
+  -webkit-tap-highlight-color: transparent;
+}
+.quick-alert-fab:active { transform: translateX(-50%) scale(0.96); }
+.quick-alert-fab[hidden] { display: none; }
+/* Dim when night vision is active */
+body.night-vision .quick-alert-fab {
+  background: linear-gradient(135deg, #5A2D0C, #3B1A06);
+  color: var(--cream);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+/* Night vision indicator — small red dot in topbar */
+.nv-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #C00;
+  box-shadow: 0 0 6px rgba(200,0,0,0.7);
+  flex-shrink: 0;
 }

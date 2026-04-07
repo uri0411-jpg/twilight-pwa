@@ -834,6 +834,7 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
   const dayData = {
     date, day: dateToHebDay(date), shortDate: shortDate(date),
     score, srScore, ssScore, twScore, dramaLevel, goldenHourMin,
+    certainty: ssResult.certainty,
     scoreColor: scoreToColorContinuous(score),
     scoreLabel: scoreToLabel(score),
     sunrise: sunriseStr, sunset: sunsetStr, twilight: twilightRange(sunset), purpleLightTime,

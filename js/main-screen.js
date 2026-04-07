@@ -20,6 +20,21 @@ import { renderSkyCanvas, removeSkyCanvas } from './render/skyCanvas.js';
 let _weekData = [];
 let _city = '';
 let _loc   = null;
+
+// ─────────────────────────────────────────
+//  Score → poetic Hebrew story label
+//  Replaces the generic 'טוב מאוד' labels
+//  with evocative descriptions for the gauge.
+// ─────────────────────────────────────────
+function scoreToStory(s) {
+  const n = Number(s);
+  if (n >= 9)   return 'שקיעת חלום';
+  if (n >= 7.5) return 'ציור בשמיים';
+  if (n >= 6)   return 'שווה לצאת';
+  if (n >= 4)   return 'צבעים עמומים';
+  if (n >= 2)   return 'שמיים עמומים';
+  return 'שמיים אפורים';
+}
 let _spotAvgScores = null;
 let _stopCompass = null;       // cleanup for DeviceOrientation listener
 let _stopLiveGradient = null;  // cleanup for real-time gradient interval
@@ -43,8 +58,15 @@ let _compareIdx = -1; // index of first day selected for comparison
  * @param {Object} loc    { lat, lon }
  * @returns {Function}  Cleanup function — call to stop the interval
  */
+// Track how long the main screen has been open (for night vision auto-trigger)
+let _screenOpenTime = 0;
+
 function startLiveGradient(today, loc) {
   const displayScore = _spotAvgScores?.[0] ?? today.score;
+  _screenOpenTime = Date.now();
+
+  // Track score tier for haptic crossing detection
+  let _prevScoreTier = displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low';
 
   function update() {
     let liveSkyColors  = today.skyColors ?? null;
@@ -79,6 +101,38 @@ function startLiveGradient(today, loc) {
       liveSkyColors,
       today.goldenWindow?.beltOfVenus || 0
     );
+
+    // Score tier crossing — haptic pulse to signal entering prime time
+    const newTier = displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low';
+    if (newTier !== _prevScoreTier) {
+      if (newTier === 'high') {
+        navigator.vibrate?.([10, 30, 10, 30, 10]); // triple pulse = entering prime time
+      } else if (newTier === 'mid' && _prevScoreTier === 'high') {
+        navigator.vibrate?.([20, 40, 20]);          // double pulse = leaving prime time
+      }
+      _prevScoreTier = newTier;
+    }
+
+    // Golden window start — escalating haptic
+    if (today.goldenWindow?.windowStart) {
+      const [gwH, gwM] = today.goldenWindow.windowStart.split(':').map(Number);
+      const gwMs = new Date(today.date + 'T12:00:00').setHours(gwH, gwM, 0, 0);
+      const secsToGW = (gwMs - Date.now()) / 1000;
+      if (secsToGW >= 0 && secsToGW < 35) { // within the 30s update window
+        navigator.vibrate?.([30, 50, 60, 50, 90]); // escalating = "now"
+      }
+    }
+
+    // Solar elevation → --ui-sky-t: 0 at -6° (dark), 1 at +6° (bright golden hour)
+    // Drives nav blur and glass recession via CSS calc()
+    const skyT = Math.max(0, Math.min(1, (liveElevDeg + 6) / 12));
+    document.documentElement.style.setProperty('--ui-sky-t', skyT.toFixed(3));
+
+    // Night vision: auto-engage when sun is below -2° and screen open > 2 min
+    const nvActive = liveElevDeg < -2 && (Date.now() - _screenOpenTime) > 120_000;
+    document.body.classList.toggle('night-vision', nvActive);
+    const nvIndicator = document.getElementById('nv-indicator');
+    if (nvIndicator) nvIndicator.style.display = nvActive ? 'block' : 'none';
 
     // Canvas + sun disk + crepuscular rays — update with live data
     const homeContent = document.querySelector('.home-content');
@@ -128,10 +182,11 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
   _loc      = loc;
   _spotAvgScores = spotAvgScores;
 
-  // Clear any previous countdown, compass, and live gradient
+  // Clear any previous countdown, compass, live gradient, and night vision state
   if (_countdownInterval)   { clearInterval(_countdownInterval); _countdownInterval = null; }
   if (_stopCompass)         { _stopCompass(); _stopCompass = null; }
   if (_stopLiveGradient)    { _stopLiveGradient(); _stopLiveGradient = null; }
+  document.body.classList.remove('night-vision');
 
   const container = document.getElementById('screen-main');
   if (!container) return;
@@ -275,6 +330,120 @@ function startCountdown(today) {
 
   update();
   _countdownInterval = setInterval(update, 1000);
+}
+
+// ─────────────────────────────────────────
+//  Score sparkline — tiny SVG trajectory chart
+//  Shows score arc for ±3h around sunset event.
+// ─────────────────────────────────────────
+function buildScoreSparkline(hourlyFull, sunsetStr) {
+  if (!hourlyFull || hourlyFull.length < 3) return '';
+
+  // Find sunset index; if absent, use the highest-score hour
+  let ssIdx = hourlyFull.findIndex(h => h.isSunset);
+  if (ssIdx < 0) ssIdx = hourlyFull.reduce((best, h, i) => (h.score ?? 0) > (hourlyFull[best]?.score ?? 0) ? i : best, 0);
+
+  // Take a 7-hour window centred on sunset (3h before, 3h after)
+  const start = Math.max(0, ssIdx - 3);
+  const end   = Math.min(hourlyFull.length - 1, ssIdx + 3);
+  const slice = hourlyFull.slice(start, end + 1);
+  if (slice.length < 2) return '';
+
+  const scores  = slice.map(h => h.score ?? 0);
+  const peakIdx = scores.indexOf(Math.max(...scores));
+  const peakVal = scores[peakIdx];
+  if (peakVal < 1) return '';
+
+  const W = 240, H = 36, PAD = 4;
+  const xStep = (W - PAD * 2) / (scores.length - 1);
+  const yScale = (H - PAD * 2) / 10; // score 0-10
+
+  const pts = scores.map((s, i) => {
+    const x = PAD + i * xStep;
+    const y = H - PAD - s * yScale;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  // Gradient fill area
+  const areaPath = `M${PAD},${H} ` +
+    scores.map((s, i) => `L${(PAD + i * xStep).toFixed(1)},${(H - PAD - s * yScale).toFixed(1)}`).join(' ') +
+    ` L${(PAD + (scores.length - 1) * xStep).toFixed(1)},${H} Z`;
+
+  // Peak dot
+  const pkX = (PAD + peakIdx * xStep).toFixed(1);
+  const pkY = (H - PAD - peakVal * yScale).toFixed(1);
+  const pkColor = peakVal >= 7 ? '#F0B84A' : peakVal >= 4 ? '#D4820A' : 'rgba(245,230,200,0.5)';
+
+  // Sunset marker vertical line
+  const relSsIdx = ssIdx - start;
+  const ssLineX  = (PAD + relSsIdx * xStep).toFixed(1);
+
+  return `
+    <div class="score-sparkline-wrap" title="מסלול הציון סביב השקיעה">
+      <svg class="score-sparkline" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="spk-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${pkColor}" stop-opacity="0.25"/>
+            <stop offset="100%" stop-color="${pkColor}" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <!-- sunset marker -->
+        <line x1="${ssLineX}" y1="${PAD}" x2="${ssLineX}" y2="${H}"
+              stroke="rgba(240,184,74,0.30)" stroke-width="1" stroke-dasharray="3,3"/>
+        <!-- area fill -->
+        <path d="${areaPath}" fill="url(#spk-fill)"/>
+        <!-- line -->
+        <polyline points="${pts}"
+                  fill="none"
+                  stroke="${pkColor}"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                  opacity="0.85"/>
+        <!-- peak dot -->
+        <circle cx="${pkX}" cy="${pkY}" r="3" fill="${pkColor}"/>
+      </svg>
+      <div class="sparkline-labels">
+        <span>${slice[0].t}</span>
+        <span style="color:${pkColor};font-weight:700">${peakVal.toFixed(1)}</span>
+        <span>${slice[slice.length - 1].t}</span>
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────
+//  Tier-2 score explainer tray
+//  Tap on .score-gauge-wrap → reveal 3 bars:
+//    נראות (certainty), עוצמה (drama), ביטחון (confidence proxy)
+// ─────────────────────────────────────────
+function buildScoreExplainer(today) {
+  const certainty  = today.certainty  ?? 0;          // 0-100, cloud clearance probability
+  const drama      = today.dramaLevel ?? 0;           // 0-100, atmospheric color intensity
+  // Confidence proxy: visibility (0-30 km → 0-100%) blended with cloud clearance
+  const visConf    = Math.min(100, Math.round(today._visibilityRaw / 25 * 100));
+  const confidence = Math.round(visConf * 0.55 + certainty * 0.45);
+
+  const bar = (label, value, color) => `
+    <div class="explainer-row">
+      <span class="explainer-label">${label}</span>
+      <div class="explainer-bar-track">
+        <div class="explainer-bar-fill" style="width:${value}%;background:${color}"></div>
+      </div>
+      <span class="explainer-value">${value}%</span>
+    </div>`;
+
+  const paletteHe = today.palette?.styleHe ?? '';
+  const modelLbl  = today.scoreModel
+    ? ({ CloudModel: 'ענן', DustModel: 'אבק', ClearSkyModel: 'שמיים נקיים' }[today.scoreModel] ?? today.scoreModel)
+    : 'ייסודי';
+
+  return `
+    <div class="score-explainer" id="score-explainer" hidden>
+      ${bar('נראות',    certainty,  'var(--gold)')}
+      ${bar('עוצמה',   drama,      '#E8803A')}
+      ${bar('ביטחון',  confidence, '#8BA0C0')}
+      ${paletteHe ? `<div class="explainer-model">מודל: ${paletteHe} · ${modelLbl}</div>` : `<div class="explainer-model">מודל: ${modelLbl}</div>`}
+    </div>`;
 }
 
 // ─────────────────────────────────────────
@@ -429,7 +598,7 @@ function buildMainHTML(loc, city, weekData) {
 
   const displayScore = _spotAvgScores?.[0] ?? today.score;
   const displayColor = scoreToColorContinuous(displayScore);
-  const displayLabel = scoreToLabel(displayScore);
+  const displayLabel = scoreToStory(displayScore);
 
   const tomorrow = weekData[1] || null;
   const trend = trendArrow(today.score, tomorrow?.score);
@@ -441,6 +610,7 @@ function buildMainHTML(loc, city, weekData) {
     <!-- Top bar -->
     <div class="home-topbar">
       <div class="home-topbar-left">
+        <div id="nv-indicator" class="nv-indicator" style="display:none" title="מצב ראיית לילה פעיל"></div>
         <div class="icon-btn" id="refresh-btn" title="רענן">
           <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:var(--cream-faint)">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -490,6 +660,7 @@ function buildMainHTML(loc, city, weekData) {
         <div class="score-gauge-wrap" data-score-tier="${displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low'}">
           ${buildGaugeArc(displayScore, displayColor, 130)}
           <div class="score-desc">${displayLabel}</div>
+          ${today.palette?.styleHe ? `<div class="palette-badge">✦ ${today.palette.styleHe}</div>` : ''}
           <!-- Trend arrow -->
           ${trend.arrow ? `
           <div class="trend-badge" style="${trend.css}">
@@ -517,6 +688,12 @@ function buildMainHTML(loc, city, weekData) {
           ${buildTwilightRow(today)}
         </div>
       </div>
+
+      <!-- Score trajectory sparkline -->
+      ${buildScoreSparkline(today.hourlyFull, today.sunset)}
+
+      <!-- Tier-2 explainer tray (tap gauge to reveal) -->
+      ${buildScoreExplainer(today)}
 
       <!-- Countdown timer + alert bell -->
       <div class="countdown-bell-row">
@@ -808,6 +985,32 @@ function renderDailyCards(weekData) {
 //  Event handlers
 // ─────────────────────────────────────────
 function attachMainEvents() {
+  // ─── Quick-alert FAB — thumb-zone shortcut for 30-min pre-sunset alert ───
+  const fab     = document.getElementById('quick-alert-fab');
+  const today   = _weekData[0];
+  if (fab && today) {
+    const minScore = (() => {
+      try { return JSON.parse(localStorage.getItem('twl_settings') || '{}').minScore ?? 6; }
+      catch { return 6; }
+    })();
+    const nowMs    = Date.now();
+    const [ssH, ssM] = (today.sunset || '').split(':').map(Number);
+    const sunsetMs = isNaN(ssH) ? 0 : new Date(today.date + 'T12:00:00').setHours(ssH, ssM, 0, 0);
+    const worth    = today.score >= minScore && sunsetMs > nowMs;
+    fab.hidden = !worth;
+
+    fab.addEventListener('click', () => {
+      haptic('medium');
+      const triggerAt = new Date(sunsetMs - 30 * 60 * 1000);
+      const key       = `${today.date}-sunset-30`;
+      scheduleAlert(key, triggerAt, 'שקיעה בעוד 30 דקות', today.score, today.date);
+      fab.hidden = true;
+      window.dispatchEvent(new CustomEvent('twilight:toast', {
+        detail: { msg: 'התראה נקבעה 30 דק׳ לפני שקיעה', type: 'success' }
+      }));
+    });
+  }
+
   const refreshBtn = document.getElementById('refresh-btn');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => {
@@ -882,6 +1085,19 @@ function attachMainEvents() {
     cityDisplay.style.visibility = '';
     window.dispatchEvent(new CustomEvent('twilight:refresh'));
   });
+
+  // ─── Score gauge tap → Tier-2 explainer tray ───
+  const gaugeWrap    = document.querySelector('.score-gauge-wrap');
+  const explainerEl  = document.getElementById('score-explainer');
+  if (gaugeWrap && explainerEl) {
+    gaugeWrap.style.cursor = 'pointer';
+    gaugeWrap.addEventListener('click', () => {
+      const open = !explainerEl.hidden;
+      explainerEl.hidden = open;
+      gaugeWrap.classList.toggle('gauge-explainer-open', !open);
+      haptic('light');
+    });
+  }
 
   // ─── Main bell toggle ───
   const mainBell = document.getElementById('main-bell-btn');

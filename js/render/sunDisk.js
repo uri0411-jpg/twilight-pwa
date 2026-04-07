@@ -21,6 +21,7 @@ import { computeSunAppearance } from '../engine/skyColor.js';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const DISK_ID          = 'sun-disk';
+const HALO_ID          = 'sun-halo';   // wider turbidity-driven atmospheric glow
 const HORIZON_Y_PCT    = 65;   // % from top where elevation = 0°
 const ELEV_TO_Y_SCALE  = 1.8;  // % per degree of solar elevation
 const AZ_CENTER_DEG    = 270;  // azimuth mapped to horizontal centre (due West)
@@ -118,12 +119,42 @@ export function renderSunDisk(container, { solarElevation, solarAzimuth, turbidi
     mixBlendMode:    'screen',
     transition:      'left 4s ease, top 4s ease, opacity 8s ease',
   });
+
+  // ── Turbidity atmospheric halo (wider than disk, opacity scales with turbidity) ──
+  // High turbidity (dust/haze) scatters light over a wide angle around the sun
+  if (turbidity > 0.10) {
+    let halo = container.querySelector(`#${HALO_ID}`);
+    if (!halo) {
+      halo = document.createElement('div');
+      halo.id = HALO_ID;
+      container.insertBefore(halo, container.firstChild);
+    }
+    const haloDia  = Math.round(BASE_DISK_PX * size * (2.5 + turbidity * 4));
+    const haloAlpha = clamp(0.04 + turbidity * 0.22, 0, 0.28);
+    Object.assign(halo.style, {
+      position:      'absolute',
+      left:          `${x}%`,
+      top:           `${y}%`,
+      transform:     'translate(-50%, -50%)',
+      width:         `${haloDia}px`,
+      height:        `${haloDia}px`,
+      borderRadius:  '50%',
+      background:    `radial-gradient(circle, rgba(${glowR},${Math.min(glowG+20,255)},${Math.round(b*0.4)},${haloAlpha}) 0%, rgba(${r},${Math.round(g*0.5)},0,0) 70%)`,
+      pointerEvents: 'none',
+      zIndex:        '-1',
+      mixBlendMode:  'screen',
+      transition:    'left 4s ease, top 4s ease, opacity 8s ease',
+      opacity:       opacity.toFixed(2),
+    });
+  } else {
+    container.querySelector(`#${HALO_ID}`)?.remove();
+  }
 }
 
 /**
  * Remove the #sun-disk element from the container (e.g. after astronomical twilight).
  */
 export function removeSunDisk(container) {
-  const disk = container?.querySelector(`#${DISK_ID}`);
-  if (disk) disk.remove();
+  container?.querySelector(`#${DISK_ID}`)?.remove();
+  container?.querySelector(`#${HALO_ID}`)?.remove();
 }

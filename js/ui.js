@@ -92,6 +92,13 @@ export function esc(str) {
  * @param {number} [beltOfVenus]  0-1 probability from goldenWindow
  */
 export function updateDynamicGradient(score = 5, turbidity = 0.3, palette = '', skyColors = null, beltOfVenus = 0) {
+  // Adaptive glassmorphism — high drama = transparent glass, low drama = opaque
+  const root = document.documentElement.style;
+  const drama = Math.min(Math.max(score, 1) / 10, 1);
+  root.setProperty('--glass-blur',     `${(2 + (1 - drama) * 8).toFixed(1)}px`);
+  root.setProperty('--glass-alpha',    (0.32 + (1 - drama) * 0.28).toFixed(2));
+  root.setProperty('--glass-saturate', `${Math.round(110 + drama * 40)}%`);
+
   if (skyColors && !new URLSearchParams(location.search).get('useLegacyGradient')) {
     renderSkyGradient(skyColors, beltOfVenus);
     return;
