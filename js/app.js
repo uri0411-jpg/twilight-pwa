@@ -39,78 +39,20 @@ async function boot() {
 
   showMainSkeleton();
   showLoading(true);
+
+  // Hard timeout safety net — if anything hangs (geolocation popup, slow network),
+  // force an error after 30s instead of infinite loading
+  const bootTimeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Boot timeout (30s) — בדוק חיבור לאינטרנט')), 30000)
+  );
+
   try {
-    const saved = loadLocation();
-    if (saved) {
-      _loc  = saved;
-      _city = saved.city || 'מיקומך';
-    } else {
-      _loc  = await getGPS();
-      if (_loc.isFallback) {
-        showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
-      }
-      _city = await fetchCityName(_loc.lat, _loc.lon);
-      saveLocation(_loc.lat, _loc.lon, _city);
-    }
-
-    const [weather, airQ, westData, nearbySpots] = await Promise.all([
-      fetchWeek(_loc.lat, _loc.lon),
-      fetchAirQuality(_loc.lat, _loc.lon).catch(() => null),
-      fetchWesternHorizon(_loc.lat, _loc.lon).catch(() => null),
-      fetchSpots(_loc.lat, _loc.lon, 10).catch(() => [])
-    ]);
-    _airQuality = airQ;
-    _weekData = calcWeekData(weather, _airQuality, _loc.lat, _loc.lon, westData);
-    const spotAvgScores = calcNearbyAvgScore(nearbySpots, _weekData, _loc.lat, _loc.lon);
-
-    await initMainScreen(_loc, _city, _weekData, spotAvgScores);
-
-    // Background pre-load for spots tab — fire-and-forget
-    preloadSpotsData(_weekData, _loc).catch(() => {});
-
-    // ─── Stale data warning ───
-    const wCacheKey = `weather_${_loc.lat.toFixed(3)}_${_loc.lon.toFixed(3)}`;
-    const ageMin = getCacheAge(wCacheKey);
-    if (ageMin !== null && ageMin > 360) {
-      const ageH = Math.round(ageMin / 60);
-      showToast(`הנתונים עדכניים מלפני ${ageH} שעות — משתמש במטמון`, 'info');
-    }
-
-    // ─── Dynamic theme-color ───
-    updateThemeColor(_weekData);
-
-    // ─── Calibration: record today's prediction ───
-    if (_weekData[0]) {
-      recordPrediction(_weekData[0].date, _weekData[0].score, _weekData[0], _loc.lat, _loc.lon);
-    }
-
-    // ─── Calibration: backfill actual data for unfilled days ───
-    const unfilled = getUnfilledDates();
-    if (unfilled.length > 0 && _loc) {
-      const ssHour = parseInt(_weekData[0]?.sunset?.split(':')[0] || '18', 10);
-      Promise.allSettled(
-        unfilled.slice(0, 3).map(dt =>
-          fetchActualForDate(dt, _loc.lat, _loc.lon, ssHour)
-            .then(() => processLearningForEntry(dt))
-        )
-      ).then(results => {
-        const failed = results.filter(r => r.status === 'rejected').length;
-        if (failed > 0) console.warn(`[calibration] ${failed} backfill(s) failed`);
-      });
-    }
-
-    if (saved && !saved.city) {
-      fetchCityName(_loc.lat, _loc.lon).then(city => {
-        _city = city;
-        saveLocation(_loc.lat, _loc.lon, city);
-      }).catch(() => {});
-    }
-
+    await Promise.race([loadAppData(), bootTimeout]);
   } catch (err) {
     console.error('[boot] Failed:', err);
     showToast('שגיאה בטעינת נתונים — לחץ לנסות שוב', 'error');
     const errMsg = (err && (err.message || err.toString())) || 'unknown';
-    document.querySelector('#main-screen').innerHTML =
+    document.querySelector('#screen-main').innerHTML =
       `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:1rem;padding:1rem;text-align:center">
          <p style="color:var(--cream);font-size:1.1rem">שגיאה בטעינת נתונים</p>
          <p style="color:var(--cream);font-size:.75rem;opacity:.6;direction:ltr;max-width:90%;word-break:break-word">${errMsg}</p>
@@ -122,36 +64,89 @@ async function boot() {
   }
 
   // ─── Screen change handler ───
-  // FIX: guard against switching screens before _weekData is ready
   onScreenChange(async (id) => {
     if (id === 'spots' && !_weekData) {
       showToast('תחזית עדיין נטענת, המתן רגע...', 'info');
       return;
     }
-
     if (id === 'spots') {
       _spotsInitialized = true;
       await initSpotsScreen(_weekData);
     }
-
     if (id === 'settings') {
       initSettingsScreen();
     }
   });
 
-  // ─── Refresh event ───
   window.addEventListener('twilight:refresh', handleRefresh);
-
-  // ─── Manual location search event ───
   window.addEventListener('twilight:setLocation', handleSetLocation);
-
-  // ─── Toast relay event ───
   window.addEventListener('twilight:toast', (e) => {
     showToast(e.detail?.msg || '', e.detail?.type || 'info');
   });
-
-  // FIX: single visibilitychange listener (was duplicated — one inside boot, one at module scope)
   document.addEventListener('visibilitychange', handleVisibilityChange);
+}
+
+async function loadAppData() {
+  const saved = loadLocation();
+  if (saved) {
+    _loc  = saved;
+    _city = saved.city || 'מיקומך';
+  } else {
+    _loc  = await getGPS();
+    if (_loc.isFallback) {
+      showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
+    }
+    _city = await fetchCityName(_loc.lat, _loc.lon);
+    saveLocation(_loc.lat, _loc.lon, _city);
+  }
+
+  const [weather, airQ, westData, nearbySpots] = await Promise.all([
+    fetchWeek(_loc.lat, _loc.lon),
+    fetchAirQuality(_loc.lat, _loc.lon).catch(() => null),
+    fetchWesternHorizon(_loc.lat, _loc.lon).catch(() => null),
+    fetchSpots(_loc.lat, _loc.lon, 10).catch(() => [])
+  ]);
+  _airQuality = airQ;
+  _weekData = calcWeekData(weather, _airQuality, _loc.lat, _loc.lon, westData);
+  const spotAvgScores = calcNearbyAvgScore(nearbySpots, _weekData, _loc.lat, _loc.lon);
+
+  await initMainScreen(_loc, _city, _weekData, spotAvgScores);
+
+  preloadSpotsData(_weekData, _loc).catch(() => {});
+
+  const wCacheKey = `weather_${_loc.lat.toFixed(3)}_${_loc.lon.toFixed(3)}`;
+  const ageMin = getCacheAge(wCacheKey);
+  if (ageMin !== null && ageMin > 360) {
+    const ageH = Math.round(ageMin / 60);
+    showToast(`הנתונים עדכניים מלפני ${ageH} שעות — משתמש במטמון`, 'info');
+  }
+
+  updateThemeColor(_weekData);
+
+  if (_weekData[0]) {
+    recordPrediction(_weekData[0].date, _weekData[0].score, _weekData[0], _loc.lat, _loc.lon);
+  }
+
+  const unfilled = getUnfilledDates();
+  if (unfilled.length > 0 && _loc) {
+    const ssHour = parseInt(_weekData[0]?.sunset?.split(':')[0] || '18', 10);
+    Promise.allSettled(
+      unfilled.slice(0, 3).map(dt =>
+        fetchActualForDate(dt, _loc.lat, _loc.lon, ssHour)
+          .then(() => processLearningForEntry(dt))
+      )
+    ).then(results => {
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed > 0) console.warn(`[calibration] ${failed} backfill(s) failed`);
+    });
+  }
+
+  if (saved && !saved.city) {
+    fetchCityName(_loc.lat, _loc.lon).then(city => {
+      _city = city;
+      saveLocation(_loc.lat, _loc.lon, city);
+    }).catch(() => {});
+  }
 }
 
 // ─────────────────────────────────────────
