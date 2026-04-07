@@ -73,34 +73,52 @@ export function esc(str) {
 }
 
 /**
- * Update the dynamic background gradient based on score + turbidity.
+ * Update the dynamic background gradient based on physics sky colours.
  *
- * High score + low turbidity  → wide Rayleigh gradient (deep purple/pink)
- * High score + high turbidity → Mie-dominated (deep red/orange)
- * Low score                   → muted dark tones (clouds expected)
+ * Primary path  (skyColors present, no ?useLegacyGradient):
+ *   Delegates to skyGradient.js:renderSkyGradient — physics-derived colours.
  *
- * Sets CSS custom properties --dyn-bg-top / --dyn-bg-bottom on :root.
+ * Neutral fallback (skyColors absent):
+ *   Sets a safe dark neutral gradient.  Does NOT use score to drive colour —
+ *   this avoids the architectural flaw where a quality metric changes hue.
  *
- * @param {number} score       1-10 sunset quality
- * @param {number} turbidity   0-1 aerosol index from physicsLayer
- * @param {string} [palette]   palette style name (e.g. 'Desert Fire')
+ * Legacy path (?useLegacyGradient=1 in URL):
+ *   Original score + turbidity heuristic, preserved for A/B comparison.
+ *
+ * @param {number} score          1-10 sunset quality
+ * @param {number} turbidity      0-1 aerosol index from physicsLayer
+ * @param {string} [palette]      palette style name — legacy path only
+ * @param {object|null} skyColors physics sky colours from skyColor.js
+ * @param {number} [beltOfVenus]  0-1 probability from goldenWindow
  */
-export function updateDynamicGradient(score = 5, turbidity = 0.3, palette = '', skyColors = null) {
+export function updateDynamicGradient(score = 5, turbidity = 0.3, palette = '', skyColors = null, beltOfVenus = 0) {
   if (skyColors && !new URLSearchParams(location.search).get('useLegacyGradient')) {
-    renderSkyGradient(skyColors);
+    renderSkyGradient(skyColors, beltOfVenus);
     return;
   }
+
+  // skyColors missing — use neutral dark fallback, never score-driven colour
+  if (!skyColors) {
+    document.documentElement.style.setProperty('--dyn-bg-top',    'rgba(15, 6, 2, 0.50)');
+    document.documentElement.style.setProperty('--dyn-bg-mid',    'rgba(12, 5, 2, 0.40)');
+    document.documentElement.style.setProperty('--dyn-bg-belt',   'rgba(10, 4, 8, 0.00)');
+    document.documentElement.style.setProperty('--dyn-bg-earth',  'rgba(5, 3, 4, 0.60)');
+    document.documentElement.style.setProperty('--dyn-bg-bottom', 'rgba(8,  3, 1, 0.97)');
+    return;
+  }
+
+  // Legacy path — only reached when ?useLegacyGradient=1
   const s = Math.max(0, Math.min(1, (score - 1) / 9)); // normalise 1-10 → 0-1
 
   let top, mid, bottom;
 
-  if (palette === 'Desert Fire' || (turbidity > 0.60 && s > 0.55)) {
+  if (turbidity > 0.60 && s > 0.55) {
     // Mie-dominated: intense red/orange sun disk
     top    = `rgba(${Math.round(70 + s * 40)}, ${Math.round(10 + s * 8)}, 0, 0.42)`;
     mid    = `rgba(${Math.round(70 + s * 40)}, ${Math.round(10 + s * 8)}, 0, 0.42)`;
     bottom = `rgba(18, 4, 0, 0.97)`;
 
-  } else if (palette === 'Purple Twilight' || (turbidity < 0.25 && s > 0.60)) {
+  } else if (turbidity < 0.25 && s > 0.60) {
     // Clean-air Rayleigh: broad purple-to-pink gradient
     const r = Math.round(28 + s * 32);
     const g = Math.round(5  + s * 10);
@@ -109,8 +127,8 @@ export function updateDynamicGradient(score = 5, turbidity = 0.3, palette = '', 
     mid    = `rgba(${r}, ${g}, ${b}, 0.42)`;
     bottom = `rgba(10, 3, 22, 0.97)`;
 
-  } else if (palette === 'Storm Break' || (s > 0.55 && turbidity > 0.35)) {
-    // Storm break / mixed: warm amber top, deep plum bottom
+  } else if (s > 0.55 && turbidity > 0.35) {
+    // Mixed: warm amber top, deep plum bottom
     top    = `rgba(${Math.round(55 + s * 35)}, ${Math.round(20 + s * 15)}, 0, 0.42)`;
     mid    = `rgba(${Math.round(55 + s * 35)}, ${Math.round(20 + s * 15)}, 0, 0.42)`;
     bottom = `rgba(12, 4, 18, 0.97)`;
@@ -133,6 +151,8 @@ export function updateDynamicGradient(score = 5, turbidity = 0.3, palette = '', 
 
   document.documentElement.style.setProperty('--dyn-bg-top',    top);
   document.documentElement.style.setProperty('--dyn-bg-mid',    mid);
+  document.documentElement.style.setProperty('--dyn-bg-belt',   'rgba(10, 4, 8, 0.00)');
+  document.documentElement.style.setProperty('--dyn-bg-earth',  'rgba(5, 3, 4, 0.60)');
   document.documentElement.style.setProperty('--dyn-bg-bottom', bottom);
 }
 

@@ -10,14 +10,114 @@ import { recordUserRating, hasRatedToday } from './calibration.js';
 import { haptic } from './nav.js';
 import { initDebugPanel } from './debugPanel.js';
 import { watchSunsetBearing } from './location.js';
+import { getSunAngleDegrees } from './engine/sun.js';
+import { airMass as kastenyoungAirMass } from './engine/physicsLayer.js';
+import { computeSkyColor, applyScoreBias } from './engine/skyColor.js';
+import { renderSunDisk, removeSunDisk } from './render/sunDisk.js';
+import { renderCrepuscularRays, removeCrepuscularRays } from './render/crepuscularRays.js';
+import { renderSkyCanvas, removeSkyCanvas } from './render/skyCanvas.js';
 
 let _weekData = [];
 let _city = '';
 let _loc   = null;
 let _spotAvgScores = null;
-let _stopCompass = null; // cleanup for DeviceOrientation listener
+let _stopCompass = null;       // cleanup for DeviceOrientation listener
+let _stopLiveGradient = null;  // cleanup for real-time gradient interval
 let _countdownInterval = null;
 let _compareIdx = -1; // index of first day selected for comparison
+
+// ─────────────────────────────────────────
+//  Real-time sky gradient (30 s interval)
+// ─────────────────────────────────────────
+
+/**
+ * Start a 30-second interval that recomputes the sky gradient using the
+ * actual current solar elevation (not the pre-computed sunset-time elevation).
+ *
+ * This keeps the background visually accurate during the golden-hour /
+ * twilight window when the gradient changes quickly.
+ *
+ * Falls back to today's pre-computed skyColors when no location is available.
+ *
+ * @param {Object} today  dayData for today (weekData[0])
+ * @param {Object} loc    { lat, lon }
+ * @returns {Function}  Cleanup function — call to stop the interval
+ */
+function startLiveGradient(today, loc) {
+  const displayScore = _spotAvgScores?.[0] ?? today.score;
+
+  function update() {
+    let liveSkyColors  = today.skyColors ?? null;
+    let liveElevDeg    = today._solarElevation ?? 0;
+    let liveAirmass    = today.physicsContributions?.airMass ?? 10;
+
+    if (loc?.lat != null && loc?.lon != null) {
+      try {
+        liveElevDeg = getSunAngleDegrees({ time: new Date(), lat: loc.lat, lon: loc.lon });
+        liveAirmass = kastenyoungAirMass(Math.max(liveElevDeg, -6));
+        liveSkyColors = applyScoreBias(
+          computeSkyColor({
+            solarElevation: liveElevDeg,
+            airMass:        liveAirmass,
+            turbidity:      today.turbidity      ?? 0.3,
+            mieIntensity:   today.mieIntensity   ?? 0.5,
+            rayleighSpread: today.rayleighSpread  ?? 0.5,
+            humidity:       today._humidityRaw   ?? 50,
+            angstromExp:    0,
+          }),
+          today.dramaLevel ?? 50
+        );
+      } catch (_) {
+        // Silently fall back to pre-computed skyColors
+      }
+    }
+
+    updateDynamicGradient(
+      displayScore,
+      today.turbidity ?? 0.3,
+      today.palette?.style ?? '',
+      liveSkyColors,
+      today.goldenWindow?.beltOfVenus || 0
+    );
+
+    // Canvas + sun disk + crepuscular rays — update with live data
+    const homeContent = document.querySelector('.home-content');
+    if (homeContent) {
+      // Canvas sky gradient (smoother, 8-stop, above CSS background)
+      renderSkyCanvas(
+        homeContent,
+        liveElevDeg * (Math.PI / 180),
+        today.turbidity  ?? 0.3,
+        0,
+        today.goldenWindow?.beltOfVenus || 0
+      );
+    }
+    if (homeContent && today._solarAzimuth != null) {
+      renderSunDisk(homeContent, {
+        solarElevation: liveElevDeg,
+        solarAzimuth:   today._solarAzimuth,
+        turbidity:      today.turbidity    ?? 0.3,
+        mieIntensity:   today.mieIntensity ?? 0.5,
+        humidity:       today._humidityRaw ?? 50,
+        airMass:        liveAirmass,
+      });
+
+      const crepProb = today.scoreEngine?.crepuscularRays ?? 0;
+      renderCrepuscularRays(homeContent, crepProb, today._solarAzimuth,
+        /* sunY approx from elevation */ 65 - liveElevDeg * 1.8);
+    }
+  }
+
+  update(); // immediate first paint
+  const id = setInterval(update, 30_000);
+  return () => {
+    clearInterval(id);
+    const hc = document.querySelector('.home-content');
+    removeSkyCanvas(hc);
+    removeSunDisk(hc);
+    removeCrepuscularRays(hc);
+  };
+}
 
 /**
  * Initialize and render the main screen
@@ -28,9 +128,10 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
   _loc      = loc;
   _spotAvgScores = spotAvgScores;
 
-  // Clear any previous countdown and compass
-  if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
-  if (_stopCompass)       { _stopCompass(); _stopCompass = null; }
+  // Clear any previous countdown, compass, and live gradient
+  if (_countdownInterval)   { clearInterval(_countdownInterval); _countdownInterval = null; }
+  if (_stopCompass)         { _stopCompass(); _stopCompass = null; }
+  if (_stopLiveGradient)    { _stopLiveGradient(); _stopLiveGradient = null; }
 
   const container = document.getElementById('screen-main');
   if (!container) return;
@@ -41,9 +142,8 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
 
   const today = weekData[0];
   if (today) {
-    // Pulse 3: dynamic background gradient
-    const _displayScore = _spotAvgScores?.[0] ?? today.score;
-    updateDynamicGradient(_displayScore, today.turbidity ?? 0.3, today.palette?.style ?? '', today.skyColors ?? null);
+    // Pulse 3: dynamic background gradient — live update every 30 s
+    _stopLiveGradient = startLiveGradient(today, loc);
 
     // Pulse 1: debug panel — long-press on title to reveal
     initDebugPanel('.home-title', today, loc);

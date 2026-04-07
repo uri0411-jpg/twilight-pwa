@@ -17,6 +17,7 @@ import { computeScattering } from './engine/physicsLayer.js';
 import { predictGoldenWindow } from './engine/goldenWindow.js';
 import { computeSkyColor, applyScoreBias } from './engine/skyColor.js';
 import { getLearningAdjustments } from './engine/learningEngine.js';
+import { computeScore as computeEngineScore } from './engine/scoreEngine.js';
 
 // ─── Helpers ─────────────────────────────
 
@@ -717,6 +718,14 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     clouds:              ssParams.clouds / 100,
   });
 
+  // Ångström exponent from PM2.5 / (PM10 + dust) ratio:
+  //   high ratio (≈1) → fine smoke/urban particles → blue-tinted haze
+  //   low  ratio (≈0) → coarse dust / sea salt     → white/grey haze
+  const _p25 = Number(ssParams.pm2_5) || 0;
+  const _p10 = Number(ssParams.pm10)  || 0;
+  const _d   = Number(ssParams.dust)  || 0;
+  const angstromExp = (_p10 + _d + 1) > 2 ? _p25 / (_p10 + _d + 1) : 0.5;
+
   const skyColors = applyScoreBias(
     computeSkyColor({
       solarElevation: ssParams.solarElevation,
@@ -725,6 +734,7 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
       mieIntensity:   physics.mieIntensity,
       rayleighSpread: physics.rayleighSpread,
       humidity:       ssParams.humidity,
+      angstromExp,
     }),
     ssResult.drama
   );
@@ -732,7 +742,33 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
   const ssScore = ssResult.score;
   const srScore = srResult.score;
   const twScore = twResult.score;
-  const score   = Math.round((ssScore * 0.6 + twScore * 0.25 + srScore * 0.15) * 10) / 10;
+
+  // ── Physics-based scoreEngine (replaces legacy composite for display) ───────
+  // computeEngineScore uses Gaussian sweet-spots + 3 piecewise models and a
+  // crepuscular-ray bonus.  Result (0–100) is scaled to 1–10 for backward compat.
+  const engineResult = (() => {
+    try {
+      return computeEngineScore({
+        clouds:             ssParams.clouds,
+        cloudHeightCategory: cloudHeightCat,
+        turbidity:          physics.turbidity,
+        mieIntensity:       physics.mieIntensity,
+        rayleighSpread:     physics.rayleighSpread,
+        atmosphericClarity: physics.atmosphericClarity,
+        solarElevation:     ssParams.solarElevation,
+        horizonGap:         ssParams.horizonGap ?? 0.5,
+        humidity:           ssParams.humidity,
+        dust:               ssParams.dust,
+      });
+    } catch (_) {
+      return null; // safe fallback — use legacy score below
+    }
+  })();
+
+  // Use engineResult when available; fall back to legacy composite
+  const score = engineResult
+    ? Math.round((engineResult.score / 10) * 10) / 10   // 0–100 → 1–10
+    : Math.round((ssScore * 0.6 + twScore * 0.25 + srScore * 0.15) * 10) / 10;
 
   const dramaLevel = ssResult.drama;
 
@@ -827,6 +863,9 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     skyColors,
     // Pulse 2: golden window — physics-aware peak time prediction
     goldenWindow,
+    // scoreEngine: richer physics-based scorer (0–100) for debug + decisionEngine
+    scoreEngine:  engineResult ?? null,
+    scoreModel:   engineResult?.model ?? null,
     hourlyFull, tags: []
   };
 

@@ -174,12 +174,13 @@ function computeSkyColorLegacy({ solarElevation, airMass, turbidity, mieIntensit
 
 /**
  * Convert atmosphere.js output to a four-zone {r,g,b} colour set.
- * @param {number} sunAngle_rad  Solar elevation in radians
- * @param {number} turbidity     0–1 from physicsLayer
+ * @param {number} sunAngle_rad    Solar elevation in radians
+ * @param {number} turbidity       0–1 from physicsLayer
+ * @param {number} [angstromExp]   Ångström exponent from PM2.5/PM10
  * @returns {{ skyTop, skyMid, horizon, sun }}
  */
-function computeSkyColorPhysics(sunAngle_rad, turbidity) {
-  const atm = computeAtmosphere(sunAngle_rad, turbidity);
+function computeSkyColorPhysics(sunAngle_rad, turbidity, angstromExp = 0) {
+  const atm = computeAtmosphere(sunAngle_rad, turbidity, angstromExp);
   return {
     skyTop:  spectrumToRGB(atm.skyTop),
     skyMid:  spectrumToRGB(atm.skyMid),
@@ -215,11 +216,11 @@ function computeSkyColorPhysics(sunAngle_rad, turbidity) {
  *   sun:     {r:number, g:number, b:number}
  * }}
  */
-export function computeSkyColor({ solarElevation, airMass, turbidity, mieIntensity, rayleighSpread, humidity }) {
+export function computeSkyColor({ solarElevation, airMass, turbidity, mieIntensity, rayleighSpread, humidity, angstromExp = 0 }) {
   // Convert degrees → radians for atmosphere.js
   const sunAngle_rad = solarElevation * (Math.PI / 180);
 
-  const physics = computeSkyColorPhysics(sunAngle_rad, turbidity);
+  const physics = computeSkyColorPhysics(sunAngle_rad, turbidity, angstromExp);
 
   if (!hybridMode) return physics;
 

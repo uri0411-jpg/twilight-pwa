@@ -13,17 +13,28 @@
  *   650 nm → red channel
  *
  * Four sky zones are modelled by mixing a Rayleigh-scatter component with a
- * direct-transmittance component in different proportions:
+ * direct-transmittance component in different proportions that vary with solar
+ * elevation (see zoneMixRatios):
  *
- *   skyTop  : 90% scatter + 10% direct   → Rayleigh-dominant, deep blue
- *   skyMid  : 55% scatter + 45% direct   → warm transition
- *   horizon : 10% scatter + 90% direct   → transmittance-dominant, orange/red
- *   sun     : 100% direct (extra path)   → reddened disk
+ *   skyTop  : Rayleigh-dominant  → deep blue / violet
+ *   skyMid  : blended transition → warm pink / amber
+ *   horizon : transmittance-dominant → orange / red at sunset
+ *   sun     : 100% direct (extra path) → reddened disk
+ *
+ * Air-mass model: Kasten-Young 1989 (imported from physicsLayer.js) with a
+ * smooth exponential extension below the horizon to capture civil-twilight
+ * purple/violet scatter (0° to −6°).
+ *
+ * Ozone: stratospheric Chappuis-band absorption (300 DU, Israel climatology)
+ * selectively attenuates 500–700 nm, reinforcing the blue/violet twilight arch.
  *
  * References:
  *   Rayleigh optical depth coefficients — Bodhaine et al. (1999), simplified
  *   Beer-Lambert law — standard atmospheric optics
+ *   Air mass — Kasten & Young (1989) via physicsLayer.js
  */
+
+import { airMass as kastenyoungAirMass } from './physicsLayer.js';
 
 // ── Wavelengths ───────────────────────────────────────────────────────────────
 
@@ -45,17 +56,24 @@ function rayleighBeta(lambda_um) {
 }
 
 /**
- * Mie scattering optical depth per unit air mass.
- * Mie scattering is approximately wavelength-independent for particles much
- * larger than visible light wavelengths (dust, aerosols, humidity droplets).
- * Turbidity is the primary driver; coefficient 0.05 is tuned so that
- * turbidity=1 roughly doubles total extinction at the horizon.
+ * Mie scattering optical depth per unit air mass at wavelength λ.
  *
- * @param {number} turbidity  Aerosol loading index 0–1 (from physicsLayer.js)
- * @returns {number} β_M — Mie optical depth per air mass unit
+ * The Ångström exponent (α) describes spectral dependence of aerosol extinction:
+ *   β_M(λ) = 0.05 · turbidity · (0.55 / λ)^α
+ *
+ *   α ≈ 0   → wavelength-independent (coarse dust, sea salt)   → white/grey haze
+ *   α ≈ 1.5 → strong wavelength dependence (fine smoke/urban)  → blue-tinted haze
+ *
+ * When angstromExp = 0 (default) the formula reduces to the previous
+ * wavelength-independent value, preserving backward compatibility.
+ *
+ * @param {number} lambda_um    Wavelength in µm
+ * @param {number} turbidity    Aerosol loading index 0–1 (from physicsLayer.js)
+ * @param {number} [angstromExp=0]  Ångström exponent α (from PM2.5/PM10 ratio)
+ * @returns {number} β_M(λ) — Mie optical depth per air mass unit
  */
-function mieBeta(turbidity) {
-  return 0.05 * turbidity;
+function mieBeta(lambda_um, turbidity, angstromExp = 0) {
+  return 0.05 * turbidity * Math.pow(0.55 / lambda_um, angstromExp);
 }
 
 // Normalization anchor: β_R at 450 nm (maximum Rayleigh coefficient)
@@ -66,41 +84,96 @@ const K_R_MAX = rayleighBeta(0.450); // ≈ 0.01942
 /**
  * Compute relative air mass from solar elevation angle.
  *
- * Simple plane-parallel approximation:
- *   m = 1 / sin(elevation)  ≡  1 / cos(zenith angle)
+ * Delegates to physicsLayer.js:airMass (Kasten-Young 1989) for elevations
+ * at or above the horizon.  For sub-horizon elevations (civil twilight,
+ * 0° to −6°) a smooth exponential continuation is applied so that scattered
+ * light reaching the upper atmosphere is modelled:
  *
- * Per the user specification this is the accepted formula.  A minimum
- * elevation clamp of ~2° (sin ≈ 0.035) prevents the singularity at the
- * horizon and caps m at ≈ 28, which is representative of real astronomical
- * refraction limits.
+ *   m(0°)  ≈ 28   (Kasten-Young horizon value)
+ *   m(−3°) ≈ 44
+ *   m(−6°) ≈ 64   → enables purple-violet Belt-of-Venus colours
  *
- * @param {number} sunAngle_rad  Solar elevation in radians (positive = above horizon)
+ * @param {number} sunAngle_rad  Solar elevation in radians (negative = below horizon)
  * @returns {number}  Dimensionless air mass m ≥ 1
  */
 function computeAirmass(sunAngle_rad) {
-  const sinEl = Math.sin(sunAngle_rad);
-  // Clamp denominator: below ~2° elevation use m ≈ 28 (horizon approximation)
-  return 1.0 / Math.max(sinEl, 0.035);
+  const deg = sunAngle_rad * (180 / Math.PI);
+  if (deg >= 0) {
+    // Above horizon — Kasten-Young 1989 (same formula as physicsLayer.js)
+    return kastenyoungAirMass(deg);
+  }
+  if (deg >= -6) {
+    // Civil twilight — smooth exponential continuation from horizon value
+    const horizonM = kastenyoungAirMass(0);
+    return horizonM * Math.exp(-sunAngle_rad / (1.5 * Math.PI / 180));
+  }
+  // Astronomical / nautical twilight and below — sky effectively dark
+  return 80;
+}
+
+// ── Ozone Chappuis absorption ─────────────────────────────────────────────────
+
+/**
+ * Stratospheric ozone (O₃) Chappuis band absorption transmittance.
+ *
+ * The Chappuis bands (500–700 nm, peak ~600 nm) absorb orange–red wavelengths.
+ * This differential absorption relative to blue (450 nm, near-zero absorption)
+ * is the primary physical cause of the blue-violet twilight arch and Belt-of-Venus
+ * tint seen 5–10° above the anti-solar horizon after sunset.
+ *
+ * Parameterisation:
+ *   σ(λ) = σ_max × exp( −½ ((λ − λ_peak) / w)² )   Gaussian fit to Chappuis peak
+ *   T_O3  = exp( −σ(λ) × [O₃] )
+ *
+ *   σ_max  = 0.02  (relative, normalised units)
+ *   λ_peak = 0.600 µm
+ *   w      = 0.080 µm  (Gaussian width)
+ *   [O₃]   = ozoneDU × 1e-3  (scaled column density)
+ *
+ * At a vertical column of 300 DU (Israel spring/summer climatology):
+ *   T(450 nm) ≈ 0.999  →  blue essentially unaffected
+ *   T(550 nm) ≈ 0.995  →  green mildly attenuated
+ *   T(600 nm) ≈ 0.994  →  orange slightly reduced
+ *
+ * The effect is applied to every wavelength in every sky zone and compounds
+ * with the Rayleigh + Mie Beer-Lambert attenuation, reinforcing the blue/violet
+ * excess in the upper sky especially at high air mass (low solar elevation).
+ *
+ * @param {number} lambda_um      Wavelength in µm
+ * @param {number} [ozoneDU=300]  Total ozone column in Dobson Units
+ * @returns {number} Transmittance factor in (0, 1]
+ */
+function chappuisAbsorption(lambda_um, ozoneDU = 300) {
+  const peak     = 0.600;
+  const width    = 0.080;
+  const sigmaMax = 0.02;
+  const sigma = sigmaMax * Math.exp(-0.5 * Math.pow((lambda_um - peak) / width, 2));
+  return Math.exp(-sigma * ozoneDU * 1e-3);
 }
 
 // ── Beer-Lambert transmittance ────────────────────────────────────────────────
 
 /**
- * Beer-Lambert transmittance: fraction of solar irradiance surviving the path.
- *   T(λ, m) = exp( −(β_R(λ) + β_M) × m )
+ * Combined atmospheric transmittance: Rayleigh + Mie (Beer-Lambert) × Chappuis (O₃).
+ *   T(λ, m) = exp( −(β_R(λ) + β_M(λ)) × m ) × T_O3(λ)
  *
  * At m=1 (overhead, clean air)  T ≈ 0.97  (almost unattenuated)
  * At m=28 (near-horizon, clean) T(450nm) ≈ 0.58, T(650nm) ≈ 0.75  → blue depleted
  * At m=28, turbidity=0.5        T(450nm) ≈ 0.27  (heavy haze, very red horizon)
  *
- * @param {number} lambda_um  Wavelength in µm
- * @param {number} airmass    Optical path length m
- * @param {number} turbidity  Mie loading 0–1
+ * The Chappuis term adds a wavelength-selective correction that slightly
+ * enhances the blue channel relative to orange/red — a physically correct
+ * contribution to the twilight blue arch.
+ *
+ * @param {number} lambda_um      Wavelength in µm
+ * @param {number} airmass        Optical path length m
+ * @param {number} turbidity      Mie loading 0–1
+ * @param {number} [angstromExp]  Ångström exponent for spectral Mie (default 0)
  * @returns {number} Transmittance in [0, 1]
  */
-function transmittance(lambda_um, airmass, turbidity) {
-  const tau = (rayleighBeta(lambda_um) + mieBeta(turbidity)) * airmass;
-  return Math.exp(-tau);
+function transmittance(lambda_um, airmass, turbidity, angstromExp = 0) {
+  const tau = (rayleighBeta(lambda_um) + mieBeta(lambda_um, turbidity, angstromExp)) * airmass;
+  return Math.exp(-tau) * chappuisAbsorption(lambda_um);
 }
 
 // ── Zone intensity computation ────────────────────────────────────────────────
@@ -126,19 +199,44 @@ function transmittance(lambda_um, airmass, turbidity) {
  *   - scatter: blue still dominant in ratio, but both components are dim
  *   - direct:  red > green >> blue  → orange glow dominates horizon
  *
- * @param {number}   airmass      Optical path length m
- * @param {number}   turbidity    Mie loading 0–1
- * @param {number}   scatterFrac  Weight for Rayleigh scatter (0–1)
- * @param {number}   directFrac   Weight for direct transmittance (0–1)
+ * @param {number}   airmass        Optical path length m
+ * @param {number}   turbidity      Mie loading 0–1
+ * @param {number}   scatterFrac    Weight for Rayleigh scatter (0–1)
+ * @param {number}   directFrac     Weight for direct transmittance (0–1)
+ * @param {number}   [angstromExp]  Ångström exponent for spectral Mie (default 0)
  * @returns {number[]} [I_blue, I_green, I_red]
  */
-function zoneIntensities(airmass, turbidity, scatterFrac, directFrac) {
+function zoneIntensities(airmass, turbidity, scatterFrac, directFrac, angstromExp = 0) {
   return WAVELENGTHS.map(lambda => {
-    const T = transmittance(lambda, airmass, turbidity);
+    const T = transmittance(lambda, airmass, turbidity, angstromExp);
     // Rayleigh scatter normalised to blue channel = 1.0
     const scatterNorm = (rayleighBeta(lambda) / K_R_MAX) * T;
     return scatterFrac * scatterNorm + directFrac * T;
   });
+}
+
+// ── Elevation-dependent zone mixing ratios ────────────────────────────────────
+
+/**
+ * Compute scatter/direct mixing fractions for each sky zone as a function of
+ * solar elevation.
+ *
+ * As the sun approaches the horizon (horizonFrac → 1) the direct-transmittance
+ * component grows relative to Rayleigh scatter, producing the characteristic
+ * warm orange/red horizon glow.  At high solar elevations scatter dominates
+ * everywhere and the sky is uniformly blue.
+ *
+ * @param {number} sunAngle_rad  Solar elevation in radians
+ * @returns {{ skyTop, skyMid, horizon }} each as { s: scatterFrac, d: directFrac }
+ */
+function zoneMixRatios(sunAngle_rad) {
+  // 0 at zenith (sun overhead), 1 at horizon and below
+  const horizonFrac = Math.max(0, 1 - sunAngle_rad / (Math.PI / 2));
+  return {
+    skyTop:  { s: 0.92 - 0.05 * horizonFrac, d: 0.08 + 0.05 * horizonFrac },
+    skyMid:  { s: 0.55 - 0.20 * horizonFrac, d: 0.45 + 0.20 * horizonFrac },
+    horizon: { s: 0.10 - 0.08 * horizonFrac, d: 0.90 + 0.08 * horizonFrac },
+  };
 }
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
@@ -154,8 +252,14 @@ let _cache = null;
  * Results are returned as raw per-wavelength intensities in [0, ~1].
  * Pass each zone through color.js `spectrumToRGB()` to get 0–255 RGB values.
  *
- * @param {number} sunAngle_rad  Solar elevation in radians (negative = below horizon)
- * @param {number} turbidity     Aerosol loading 0–1 (from physicsLayer.computeScattering)
+ * Zone mixing ratios vary with solar elevation (see zoneMixRatios): near the
+ * horizon the direct-transmittance component dominates, producing warm orange/
+ * red; at high elevations Rayleigh scatter dominates, producing deep blue.
+ *
+ * @param {number} sunAngle_rad       Solar elevation in radians (negative = below horizon)
+ * @param {number} turbidity          Aerosol loading 0–1 (from physicsLayer.computeScattering)
+ * @param {number} [angstromExp=0]    Ångström exponent α from PM2.5/PM10 ratio.
+ *                                    0 = pure dust (white haze), 1.5 = fine smoke (tinted haze).
  * @returns {{
  *   skyTop:   number[],   // [I_blue, I_green, I_red] — zenith zone
  *   skyMid:   number[],   // transition zone
@@ -166,26 +270,23 @@ let _cache = null;
  *   wavelengths: number[] // λ values [0.45, 0.55, 0.65] µm for reference
  * }}
  */
-export function computeAtmosphere(sunAngle_rad, turbidity) {
+export function computeAtmosphere(sunAngle_rad, turbidity, angstromExp = 0) {
   // ── Cache lookup ──────────────────────────────────────────────────────────
-  const cacheKey = `${sunAngle_rad.toFixed(3)}_${turbidity.toFixed(3)}`;
+  const cacheKey = `${sunAngle_rad.toFixed(3)}_${turbidity.toFixed(3)}_${angstromExp.toFixed(2)}`;
   if (_cache && _cache.key === cacheKey) return _cache.result;
 
   // ── Air mass ──────────────────────────────────────────────────────────────
   const m = computeAirmass(sunAngle_rad);
 
-  // ── Zone colours ──────────────────────────────────────────────────────────
-  // Mixing ratios (scatterFrac, directFrac):
-  //   skyTop  → mostly Rayleigh scatter → stays blue even at sunset
-  //   skyMid  → blended transition
-  //   horizon → dominated by direct transmittance → reddened at sunset
-  //   sun     → pure direct path, 2% extra extinction models limb darkening
+  // ── Elevation-dependent mixing ratios ─────────────────────────────────────
+  const mix = zoneMixRatios(sunAngle_rad);
 
+  // ── Zone colours ──────────────────────────────────────────────────────────
   const result = {
-    skyTop:    zoneIntensities(m,        turbidity, 0.90, 0.10),
-    skyMid:    zoneIntensities(m,        turbidity, 0.55, 0.45),
-    horizon:   zoneIntensities(m,        turbidity, 0.10, 0.90),
-    sun:       zoneIntensities(m * 1.02, turbidity, 0.00, 1.00),
+    skyTop:    zoneIntensities(m,        turbidity, mix.skyTop.s,  mix.skyTop.d,  angstromExp),
+    skyMid:    zoneIntensities(m,        turbidity, mix.skyMid.s,  mix.skyMid.d,  angstromExp),
+    horizon:   zoneIntensities(m,        turbidity, mix.horizon.s, mix.horizon.d, angstromExp),
+    sun:       zoneIntensities(m * 1.02, turbidity, 0.00,          1.00,          angstromExp),
     airmass:   m,
     turbidity,
     wavelengths: WAVELENGTHS,

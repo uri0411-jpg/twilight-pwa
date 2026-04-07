@@ -65,14 +65,14 @@ const refractedElevation = (trueElevationDeg) => {
  * Input is the TRUE (geometric) elevation; refraction is applied internally
  * so air-mass reflects the actual atmospheric path length.
  */
-const airMass = (solarElevationDeg) => {
+export function airMass(solarElevationDeg) {
   if (solarElevationDeg < -2) return 80;
   // Use refracted elevation for path-length calculation — the atmosphere
   // doesn't know the geometric position, only the apparent one.
   const h = Math.max(refractedElevation(solarElevationDeg), 0.1);
   const hRad = (h * Math.PI) / 180;
   return 1 / (Math.sin(hRad) + 0.50572 * Math.pow(h + 6.07995, -1.6364));
-};
+}
 
 // ─── Main Export ────────────────────────────────────────────────────────────
 

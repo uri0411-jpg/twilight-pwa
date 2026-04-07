@@ -90,6 +90,13 @@ function buildContent(dayData, loc) {
   lines.push(`Composite:  ${dayData.score}  (1-10)`);
   lines.push(`Sunset:     ${dayData.ssScore}   Twilight: ${dayData.twScore}   Sunrise: ${dayData.srScore}`);
   lines.push(`Certainty:  ${dayData.certainty ?? '?'}%   Drama: ${dayData.dramaLevel ?? '?'}%`);
+  if (dayData.scoreEngine) {
+    const se = dayData.scoreEngine;
+    lines.push(`Engine:     ${se.score?.toFixed(1) ?? '?'}/100  Model: ${se.model ?? '?'}`);
+    if (se.crepuscularRays > 0) {
+      lines.push(`Crepuscular rays: ${(se.crepuscularRays * 100).toFixed(0)}%`);
+    }
+  }
   lines.push(``);
 
   // Physics layer

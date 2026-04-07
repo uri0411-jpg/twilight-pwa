@@ -296,13 +296,16 @@ body.has-install-banner .screen { padding-top: 56px; }
 }
 
 /* ─── CINEMATIC ANIMATIONS ─── */
+/* scoreGlow and scoreGlowSubtle now animate opacity only (compositor-only,
+   no repaint).  The visible glow is provided by a static box-shadow on the
+   score gauge element so that the GPU layer is never dirtied by filter changes. */
 @keyframes scoreGlow {
-  0%, 100% { filter: drop-shadow(0 0 8px var(--glow-color, rgba(212,130,10,0.25))); }
-  50%      { filter: drop-shadow(0 0 18px var(--glow-color, rgba(212,130,10,0.45))); }
+  0%, 100% { opacity: 0.82; }
+  50%       { opacity: 1.00; }
 }
 @keyframes scoreGlowSubtle {
-  0%, 100% { filter: drop-shadow(0 0 4px var(--glow-color, rgba(60,60,120,0.20))); }
-  50%      { filter: drop-shadow(0 0 10px var(--glow-color, rgba(60,60,120,0.30))); }
+  0%, 100% { opacity: 0.65; }
+  50%       { opacity: 0.88; }
 }
 @keyframes breathe {
   0%, 100% { opacity: 0.7; }
@@ -343,11 +346,13 @@ body.has-install-banner .screen { padding-top: 56px; }
 /* ═══════════════════════════════════════════
    MAIN SCREEN
 ═══════════════════════════════════════════ */
-/* Dynamic gradient CSS vars — set by updateDynamicGradient() in ui.js */
+/* Dynamic gradient CSS vars — set by renderSkyGradient() / updateDynamicGradient() */
 :root {
-  --dyn-bg-top:    rgba(30, 8, 0, 0.35);
-  --dyn-bg-mid:    rgba(55, 15, 0, 0.30);
-  --dyn-bg-bottom: rgba(10, 4, 0, 0.97);
+  --dyn-bg-top:    rgba(30, 8, 0, 0.35);   /* zenith — Rayleigh blue/violet */
+  --dyn-bg-mid:    rgba(55, 15, 0, 0.30);  /* mid sky — warm transition */
+  --dyn-bg-belt:   rgba(40, 10, 30, 0.00); /* Belt of Venus arch — default transparent */
+  --dyn-bg-earth:  rgba(5, 3, 8, 0.60);    /* earth shadow near horizon */
+  --dyn-bg-bottom: rgba(10, 4, 0, 0.97);   /* ground level — deep dark */
 }
 
 .home-content {
@@ -358,12 +363,14 @@ body.has-install-banner .screen { padding-top: 56px; }
   flex-direction: column;
   gap: 14px;
   min-height: 100%;
-  /* Pulse 3: score-driven gradient overlay on top of the bg image */
+  /* Physics-driven 5-stop sky gradient overlay on the background image.
+     Stops: zenith → mid-sky → Belt-of-Venus arch → earth-shadow → ground. */
   background: linear-gradient(
     180deg,
     var(--dyn-bg-top)    0%,
-    var(--dyn-bg-mid)    30%,
-    transparent          55%,
+    var(--dyn-bg-mid)    25%,
+    var(--dyn-bg-belt)   55%,
+    var(--dyn-bg-earth)  80%,
     var(--dyn-bg-bottom) 100%
   );
 }
