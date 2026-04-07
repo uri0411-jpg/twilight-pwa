@@ -1,15 +1,14 @@
 /**
  * skyColor.js — Physically-based sky color engine
  *
- * Computes sky colors from atmospheric scattering physics:
- *   - Rayleigh scattering → blue/violet tones (clean air)
- *   - Mie scattering     → orange/red tones (aerosols)
- *   - Beer-Lambert       → attenuation along air mass path
- *   - Twilight model     → purple/magenta shift when sun < 0°
+ * Delegates to spectralEngine.js for a full spectral pipeline:
+ *   380–700 nm Rayleigh (λ⁻⁴) + Mie (λ⁻ᵅ) → CIE XYZ → sRGB + Reinhard tone map.
  *
- * Score bias: drama level only adjusts saturation/contrast (±20% max),
- * never defines base hue.
+ * The legacy RGB model below is kept as an emergency fallback only.
+ * Score bias (applyScoreBias) and sun appearance (computeSunAppearance) are unchanged.
  */
+
+import { computeSpectralSky } from './spectralEngine.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const AIR_MASS_MAX = 38;     // Kasten-Young air mass at horizon (h=0°)
@@ -79,6 +78,14 @@ function _twilightFactor(solarElevation) {
  * }}
  */
 export function computeSkyColor({ solarElevation, airMass, turbidity, mieIntensity, rayleighSpread, humidity }) {
+  // ── Spectral path (primary) ──────────────────────────────────────────────
+  try {
+    return computeSpectralSky(solarElevation, { turbidity, mieIntensity, humidity, airMass });
+  } catch (e) {
+    // fall through to legacy model
+  }
+
+  // ── Legacy RGB fallback ──────────────────────────────────────────────────
   const warmthN   = _warmthNorm(solarElevation);
   const twilightF = _twilightFactor(solarElevation);
   const intensity = _beerLambert(airMass, turbidity);

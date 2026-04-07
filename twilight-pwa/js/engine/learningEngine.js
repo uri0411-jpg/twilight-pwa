@@ -13,7 +13,7 @@
 // ═══════════════════════════════════════════
 
 import { computeScore }  from './scoreEngine.js';
-import { LEARNING_KEY }  from '../config.js';
+import { LEARNING_KEY, SEED_STATUS_KEY } from '../config.js';
 
 // ─── Constants ────────────────────────────────
 const MAX_ENTRIES         = 90;
@@ -552,6 +552,54 @@ export function seedFromBacktest(backtestEntries) {
   saveLearning(data);
   console.log(`[learning] seedFromBacktest: added ${added}, total ${data.entries.length}`);
   return { added, total: data.entries.length };
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  autoSeedIfNeeded
+//  Fetches learning-seed.json on first install and seeds the engine.
+//  Idempotent: SEED_STATUS_KEY guards against repeat runs.
+//  Returns silently on any failure — retries on the next launch.
+// ─────────────────────────────────────────────────────────────────
+export async function autoSeedIfNeeded() {
+  // Fast path: already seeded
+  try {
+    const raw = localStorage.getItem(SEED_STATUS_KEY);
+    if (raw && JSON.parse(raw)?.seededAt) return;
+  } catch { /* corrupt — fall through and re-attempt */ }
+
+  // Skip if engine already has enough real live data
+  const existing = loadLearning();
+  if (existing.state.sampleSize >= MIN_ACTIVE_SAMPLES) {
+    try {
+      localStorage.setItem(SEED_STATUS_KEY,
+        JSON.stringify({ seededAt: Date.now(), entryCount: existing.state.sampleSize, source: 'existing' })
+      );
+    } catch { /* ignore */ }
+    return;
+  }
+
+  let entries;
+  try {
+    const resp = await fetch('./learning-seed.json');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    if (!Array.isArray(json?.entries) || json.entries.length === 0)
+      throw new Error('invalid seed format');
+    entries = json.entries;
+  } catch (err) {
+    console.warn('[learning] autoSeed fetch failed — will retry next launch:', err.message);
+    return; // Do NOT write SEED_STATUS_KEY — retry on next launch
+  }
+
+  entries.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  const result = seedFromBacktest(entries);
+  console.log(`[learning] autoSeed: added ${result.added}, total ${result.total}`);
+
+  try {
+    localStorage.setItem(SEED_STATUS_KEY,
+      JSON.stringify({ seededAt: Date.now(), entryCount: result.total, source: 'auto' })
+    );
+  } catch { /* ignore */ }
 }
 
 // ✓ learningEngine.js — complete

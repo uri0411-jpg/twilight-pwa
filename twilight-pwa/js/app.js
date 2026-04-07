@@ -16,6 +16,7 @@ import { clearExpired, getCacheAge }           from './cache.js';
 import { recordPrediction, fetchActualForDate, getUnfilledDates, processLearningForEntry } from './calibration.js';
 import { initInstallPrompt }                   from './install-prompt.js';
 import { rearmSavedAlerts }                    from './notifications.js';
+import { autoSeedIfNeeded }                    from './engine/learningEngine.js';
 
 // ─────────────────────────────────────────
 //  State
@@ -111,6 +112,9 @@ async function loadAppData() {
   const spotAvgScores = calcNearbyAvgScore(nearbySpots, _weekData, _loc.lat, _loc.lon);
 
   await initMainScreen(_loc, _city, _weekData, spotAvgScores);
+
+  // Background: auto-seed learning engine on first install — non-blocking
+  autoSeedIfNeeded().catch(err => console.warn('[boot] autoSeed:', err));
 
   preloadSpotsData(_weekData, _loc).catch(() => {});
 

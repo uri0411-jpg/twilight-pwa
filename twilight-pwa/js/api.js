@@ -46,6 +46,36 @@ const DAILY_PARAMS = [
 // ─────────────────────────────────────────
 //  Fetch single model forecast
 // ─────────────────────────────────────────
+// Retry wrapper: handles 429/503 with Retry-After header or exponential backoff + jitter
+async function fetchWithRetry(url, options = {}, { maxAttempts = 3, baseMs = 1500 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, options);
+      if (res.ok) return res;
+      if ((res.status === 429 || res.status === 503) && attempt < maxAttempts - 1) {
+        const ra = parseInt(res.headers.get('Retry-After'), 10);
+        const wait = (isNaN(ra) ? baseMs * Math.pow(2, attempt) : ra * 1000) + Math.random() * 500;
+        console.warn(`[api] ${res.status} on ${url} — retry ${attempt + 1}/${maxAttempts - 1} in ${Math.round(wait)}ms`);
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      lastErr = new Error(`HTTP ${res.status}`);
+      lastErr.status = res.status;
+      throw lastErr;
+    } catch (err) {
+      lastErr = err;
+      // Network errors: retry once with short backoff
+      if (attempt < maxAttempts - 1 && !err.status) {
+        await new Promise(r => setTimeout(r, baseMs * Math.pow(2, attempt) + Math.random() * 500));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function fetchModel(lat, lon, model = null) {
   const params = new URLSearchParams({
     latitude: lat, longitude: lon,
@@ -55,9 +85,12 @@ async function fetchModel(lat, lon, model = null) {
   if (model) params.set('models', model);
 
   const url = `${OPEN_METEO_URL}?${params}`;
-  const res = await fetchWithTimeout(url);
-  if (!res.ok) throw new Error(`Open-Meteo ${model || 'best_match'} error ${res.status}`);
-  return res.json();
+  try {
+    const res = await fetchWithRetry(url);
+    return res.json();
+  } catch (err) {
+    throw new Error(`Open-Meteo ${model || 'best_match'} error ${err.status || err.message}`);
+  }
 }
 
 // ─────────────────────────────────────────
@@ -107,10 +140,10 @@ export async function fetchWeek(lat, lon) {
       console.warn('[api] fetchWeek: best_match failed, using secondary model as primary:', primaryResult.reason?.message);
       primary = fallback;
     } else {
-      // All models failed — try stale cache before crashing
+      // All 3 models failed (likely 429 rate-limit) — fall back to stale cache silently
       const stale = getStaleCache(cacheKey);
       if (stale) {
-        console.warn('[api] fetchWeek: all models failed, using stale cache');
+        console.warn('[api] fetchWeek: all models failed, using stale cache:', primaryResult.reason?.message);
         return stale;
       }
       throw primaryResult.reason;
@@ -155,14 +188,13 @@ export async function fetchAirQuality(lat, lon) {
   });
 
   try {
-    const res = await fetchWithTimeout(`${OPEN_METEO_AQ_URL}?${params}`);
-    if (!res.ok) throw new Error(`AQ API error ${res.status}`);
+    const res = await fetchWithRetry(`${OPEN_METEO_AQ_URL}?${params}`, {}, { maxAttempts: 2 });
     const data = await res.json();
     setCache(cacheKey, data, CACHE_TTL.airq);
     return data;
   } catch (e) {
     console.warn('[api] Air quality fetch failed:', e.message);
-    return null;  // non-critical — scoring works without it
+    return getStaleCache(cacheKey);  // non-critical — return stale if available
   }
 }
 
@@ -295,14 +327,13 @@ export async function fetchWesternHorizon(lat, lon) {
   });
 
   try {
-    const res = await fetchWithTimeout(`${OPEN_METEO_URL}?${params}`);
-    if (!res.ok) throw new Error(`Western horizon API error ${res.status}`);
+    const res = await fetchWithRetry(`${OPEN_METEO_URL}?${params}`, {}, { maxAttempts: 2 });
     const data = await res.json();
     setCache(cacheKey, data, CACHE_TTL.weather);
     return data;
   } catch (e) {
     console.warn('[api] Western horizon fetch failed:', e.message);
-    return null; // non-critical — scoring works without it
+    return getStaleCache(cacheKey); // non-critical — return stale if available
   }
 }
 

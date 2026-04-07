@@ -10,8 +10,8 @@ export const OVERPASS_URL           = 'https://overpass-api.de/api/interpreter';
 export const OVERPASS_FALLBACK_URL  = 'https://overpass.kumi.systems/api/interpreter';
 
 export const CACHE_TTL = {
-  weather: 30,
-  airq:    60,
+  weather: 60,
+  airq:    90,
   sun:     360,
   spots:   30
 };
@@ -57,5 +57,6 @@ export const ELEV_BONUS_THRESHOLD = 400;
 export const CALIBRATION_MIN_DAYS = 14;
 export const CALIBRATION_KEY = 'twl_calibration';
 export const LEARNING_KEY    = 'twl_learning';
+export const SEED_STATUS_KEY = 'twl_seed_status';
 
 // ✓ config.js v3

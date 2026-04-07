@@ -8,6 +8,7 @@ import { clearAll } from './cache.js';
 import { clearLocation } from './location.js';
 import { clearCalibration, getCalibrationStats } from './calibration.js';
 import { getLearningStats, clearLearningData, seedFromBacktest } from './engine/learningEngine.js';
+import { SEED_STATUS_KEY } from './config.js';
 
 const SETTINGS_KEY = 'twl_settings';
 
@@ -33,6 +34,11 @@ function defaultSettings() {
 
 function saveSettings(s) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch {}
+}
+
+function getSeedStatus() {
+  try { return JSON.parse(localStorage.getItem(SEED_STATUS_KEY) || 'null'); }
+  catch { return null; }
 }
 
 // ─────────────────────────────────────────
@@ -131,11 +137,16 @@ function buildLearningSection() {
   const stats = getLearningStats();
 
   if (stats.sampleSize === 0) {
+    const seedStatus = getSeedStatus();
+    const seedMsg = seedStatus
+      ? `נתוני בסיס הוטענו ב-${new Date(seedStatus.seededAt).toLocaleDateString('he-IL')} (${seedStatus.entryCount} ערכים)`
+      : 'נתוני הבסיס יוטענו אוטומטית בפתיחה הבאה.';
     return `
     <div class="settings-section">
       <div class="settings-section-label">מערכת הלמידה</div>
       <div class="glass" style="padding:16px;text-align:center;font-size:12px;color:var(--cream-faint);line-height:1.8">
         אין עדיין נתוני למידה.<br>
+        ${seedMsg}<br>
         המערכת תתחיל ללמוד אחרי 10 שקיעות עם נתוני מזג אוויר בפועל.
       </div>
     </div>`;
@@ -247,6 +258,14 @@ function buildLearningSection() {
       ${biasGrid}
 
       ${detailsSection}
+      ${(() => {
+        const s = getSeedStatus();
+        return s ? `<div style="font-size:10px;color:var(--cream-faint);margin-top:10px;padding-top:8px;border-top:1px solid rgba(245,220,180,0.1)">
+          נתוני בסיס: <span style="color:var(--cream)">${s.entryCount} ערכים</span>
+          · ${new Date(s.seededAt).toLocaleDateString('he-IL')}
+          ${s.source === 'auto' ? '· אוטומטי' : '· ידני'}
+        </div>` : '';
+      })()}
     </div>
   </div>`;
 }
@@ -405,7 +424,7 @@ function buildSettingsHTML() {
         <div class="settings-row" id="import-backtest-btn" style="cursor:pointer;border-top:1px solid rgba(245,220,180,0.1)">
           <div class="settings-row-label">
             <svg width="18" height="18" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            ייבוא נתוני למידה (JSON)
+            עדכן נתוני בסיס (JSON)
           </div>
           <input type="file" id="backtest-file-input" accept=".json" style="display:none"/>
           <svg width="14" height="14" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
@@ -526,6 +545,11 @@ function attachSettingsEvents() {
       // Sort oldest-first before seeding so EMA converges correctly
       const sorted = [...data.entries].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
       const result = seedFromBacktest(sorted);
+      try {
+        localStorage.setItem(SEED_STATUS_KEY,
+          JSON.stringify({ seededAt: Date.now(), entryCount: result.total, source: 'manual' })
+        );
+      } catch { /* ignore */ }
       showToast(`יובאו ${result.added} ערכים היסטוריים (סה"כ: ${result.total})`, 'success');
       initSettingsScreen(); // rebuild to show updated learning stats
     } catch (err) {
