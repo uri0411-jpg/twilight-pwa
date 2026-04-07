@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 // 🔴 BUMP THIS ON EVERY DEPLOY (twl-v3, twl-v4, ...)
-const CACHE_NAME  = 'twl-v29';  // bumped: auto-seed learning data on first launch
+const CACHE_NAME  = 'twl-v30';  // bumped: network-first for app code — no more manual version bumps
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 250;         // ~6MB at ~25KB/tile — enough for region + new spot
 
@@ -110,6 +110,15 @@ self.addEventListener('fetch', event => {
 
   const isAPI = API_PATTERNS.some(p => url.hostname.includes(p) || url.href.includes(p));
   if (isAPI) {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+
+  // App code (JS/CSS/HTML) — always try network first so updates are instant.
+  // Large stable assets (images, fonts, seed data) stay cache-first.
+  const path = url.pathname;
+  const isAppCode = path.endsWith('.js') || path.endsWith('.css') || path.endsWith('.html') || path === '/';
+  if (isAppCode) {
     event.respondWith(networkFirst(request));
     return;
   }
