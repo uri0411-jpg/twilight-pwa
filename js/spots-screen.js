@@ -199,40 +199,55 @@ function calcSpotPotential(spot, bearing) {
   return Math.max(1, Math.min(5, Math.round(p * 2) / 2)); // round to 0.5
 }
 
-// ─── Location Quality Score (1-100, static) ──────────────────────────────────
-// Independent of weather — rates the geographic quality of a spot as a viewing
-// location for sunsets/sunrises. Factors: elevation, azimuth alignment, terrain
-// type, and proximity to the Mediterranean coast.
-function calcLocationQuality(spot, bearing) {
-  const elev   = spot.elevation ?? 0;
-  const ssAz   = getSunsetAzimuth();
-  const diff   = Math.abs(bearing - ssAz);
-  const norm   = diff > 180 ? 360 - diff : diff;
+// ─── Location Quality Score (1-100) ──────────────────────────────────────────
+// Rates the geographic quality of a spot for a specific event (sunset/sunrise).
+// Pure geography — independent of weather conditions.
+//
+// Scoring (100 pts total):
+//   A. Direction alignment to sun azimuth  30 pts  (event-specific, inverted between events)
+//   B. Horizon clearance quality           25 pts  (terrain type + obstruction warning)
+//   C. Elevation above cloud layer         20 pts  (cleaner air, above low cloud)
+//   D. Accessibility from user location    15 pts  (estimated drive time)
+//   E. Terrain / landscape suitability    10 pts  (coast bonus for relevant event)
+function calcLocationQuality(spot, bearing, mode = 'sunset') {
+  const elev = spot.elevation ?? 0;
 
-  // A. Elevation (0-25 pts) — higher ground clears cloud horizons
-  const elevPts = elev >= 800 ? 25 : elev >= 500 ? 20 : elev >= 300 ? 15
-                : elev >= 150 ? 10 : elev >= 50  ?  5 : 0;
+  // Target azimuth: sunset faces west, sunrise faces opposite (east)
+  const ssAz     = getSunsetAzimuth();
+  const targetAz = mode === 'sunrise' ? (ssAz + 180) % 360 : ssAz;
+  const diff     = Math.abs(bearing - targetAz);
+  const norm     = diff > 180 ? 360 - diff : diff;
 
-  // B. Azimuth alignment to sunset (0-25 pts)
-  const azPts   = norm <= 15 ? 25 : norm <= 30 ? 20 : norm <= 45 ? 15
-                : norm <= 60 ? 10 : norm <= 90 ?  5 : 0;
+  // A. Direction — 30 pts (most important factor, event-specific)
+  const dirPts = norm <= 10 ? 30 : norm <= 25 ? 24 : norm <= 45 ? 16
+               : norm <= 70 ?  8 : norm <= 100 ?  2 : 0;
 
-  // C. Spot type / terrain (0-25 pts) — open horizon quality
-  const typePts = isWesternCoastBeach(spot)       ? 25
-                : spot.type === 'נקודת תצפית'      ? 22
-                : spot.type === 'מצוק'              ? 20
-                : spot.type === 'פסגה'              ? 16
-                : spot.type === 'חוף'               ? 12 : 5;
+  // B. Horizon quality — 25 pts (open sky toward event direction)
+  const hasWarning = !!spot._horizonWarning;
+  const horizPts = hasWarning ? 0
+    : (isWesternCoastBeach(spot) && mode === 'sunset') ? 25
+    : spot.type === 'מצוק'         ? 20
+    : spot.type === 'פסגה'         ? 16
+    : spot.type === 'נקודת תצפית' ? 14
+    : spot.type === 'חוף'          ? 12 : 5;
 
-  // D. Proximity to Mediterranean coast (0-15 pts) via spot longitude
-  const lonDiff  = Math.max(0, spot.lon - 34.65);
-  const coastPts = lonDiff < 0.05 ? 15 : lonDiff < 0.15 ? 12
-                 : lonDiff < 0.35 ?  8 : lonDiff < 0.70 ?  4 : 0;
+  // C. Elevation — 20 pts (above marine boundary layer + cleaner air)
+  const elevPts = elev >= 800 ? 20 : elev >= 500 ? 16 : elev >= 300 ? 11
+               : elev >= 150 ?  7 : elev >= 50  ?  3 : 0;
 
-  // E. Horizon warning penalty (-10 pts)
-  const penalty  = spot._horizonWarning ? -10 : 0;
+  // D. Accessibility — 15 pts (estimated drive time from user)
+  const driveMin  = estimateDriveMin(spot.dist || 0);
+  const accessPts = driveMin < 10 ? 15 : driveMin < 20 ? 12
+                  : driveMin < 35 ?  8 : driveMin < 60 ?  4 : 1;
 
-  return Math.max(1, Math.min(100, elevPts + azPts + typePts + coastPts + penalty));
+  // E. Terrain type — 10 pts (landscape suitability, coast bonus is event-specific)
+  const typePts = (isWesternCoastBeach(spot) && mode === 'sunset') ? 10
+                : spot.type === 'מצוק'         ?  8
+                : spot.type === 'נקודת תצפית'  ?  8
+                : spot.type === 'פסגה'          ?  6
+                : spot.type === 'חוף'           ?  3 : 1;
+
+  return Math.max(1, Math.min(100, dirPts + horizPts + elevPts + accessPts + typePts));
 }
 
 // ─── Stars HTML ──────────────────────────
@@ -246,116 +261,31 @@ function starsHTML(potential) {
 }
 
 // ═════════════════════════════════════════
-//  SCORING — decimal, float throughout
+//  SCORING
 // ═════════════════════════════════════════
-function calcSpotScores(spot, weekData, userLat, userLon, sunsetAzimuth, nextEventType) {
+// Sky quality (ss/sr/tw/combined) = day.score from the physics engine.
+// The atmosphere is the same at every spot — only location quality differs.
+// Location quality is handled separately via _locationQualitySunset / _locationQualitySunrise.
+function calcSpotScores(spot, weekData, userLat, userLon) {
   const bearing = calcBearing(userLat, userLon, spot.lat, spot.lon);
   spot._bearing = bearing;
   spot._potential = calcSpotPotential(spot, bearing);
 
-  const nextEvt = nextEventType ? { type: nextEventType } : getNextEvent();
-  const ssIdeal = sunsetAzimuth ?? getSunsetAzimuth();
-  const srIdeal = (ssIdeal + 180) % 360;
-
-  const days = (weekData || []).slice(0, 5).map((day, dayIdx) => {
+  const days = (weekData || []).slice(0, 5).map(day => {
     if (!day) return { ss: 5.0, sr: 5.0, tw: 5.0, combined: 5.0 };
-
-    const clouds     = day._cloudRaw ?? 50;
-    const cloudsLow  = day._cloudLowRaw ?? clouds;
-    const humidity   = day._humidityRaw ?? 50;
-    const vis        = day._visibilityRaw ?? 10;
-    const wind       = day._windRaw ?? 10;
-    const rain       = day._rainMmRaw ?? 0;
-    const dust       = day._dustRaw ?? 0;
-    const delta      = day._cloudDelta ?? 0;
-    const elev       = spot.elevation || 0;
-
-    // A. Elevation × clouds
-    let elevCloud = 0;
-    if (elev > 600 && cloudsLow > 40) elevCloud = 0.12;
-    else if (elev > 300 && cloudsLow > 50) elevCloud = 0.06;
-    const elevHaze = Math.min(0.08, elev / 10000);
-
-    // B. Azimuth
-    const ssAz = azimuthBonus(bearing, ssIdeal);
-    const srAz = azimuthBonus(bearing, srIdeal);
-
-    // C. Type
-    let typeB = 0;
-    if (isWesternCoastBeach(spot)) typeB = 0.08;
-    else if (spot.type === 'חוף') typeB = 0.02;
-    if (spot.type === 'נקודת תצפית') typeB += 0.05;
-    if (spot.type === 'מצוק') typeB += 0.03;
-
-    // D. Wind
-    let windC = 0;
-    if (wind > 20) { windC = -0.03; if (elev > 400) windC = -0.05; if (spot.type === 'חוף') windC = -0.01; }
-    else if (wind < 10) windC = 0.02;
-
-    // E. Dust
-    let dustE = 0;
-    if (dust > 80) { dustE = -0.06; if (elev > 500) dustE = -0.03; }
-    else if (dust > 40) dustE = -0.02;
-    else if (dust > 15 && vis > 10) { dustE = 0.04; if (isWesternCoastBeach(spot)) dustE = 0.06; }
-
-    // F. Rain clearing
-    let rainE = 0;
-    if (rain > 2) rainE = -0.08;
-    else if (delta < -20 && rain < 0.5) { rainE = 0.06; if (elev > 300) rainE = 0.08; }
-
-    // G. Confidence decay
-    const conf = 1 - (dayIdx * 0.08);
-
-    // Build raw 0–1
-    const baseSS = (day.ssScore - 1) / 9;
-    const baseSR = (day.srScore - 1) / 9;
-    const baseTW = (day.twScore - 1) / 9;
-
-    let rawSS = baseSS + ssAz + elevCloud + elevHaze + typeB + windC + dustE + rainE;
-    let rawSR = baseSR + srAz + elevCloud + elevHaze + typeB + windC + dustE + rainE;
-    let rawTW = baseTW + (ssAz + srAz) * 0.3 + elevCloud * 0.5 + typeB * 0.5;
-
-    rawSS = rawSS * conf + 0.5 * (1 - conf);
-    rawSR = rawSR * conf + 0.5 * (1 - conf);
-    rawTW = rawTW * conf + 0.5 * (1 - conf);
-
-    // Scale to 1–10, keep decimal
-    const ss = Math.max(1, Math.min(10, rawSS * 9 + 1));
-    const sr = Math.max(1, Math.min(10, rawSR * 9 + 1));
-    const tw = Math.max(1, Math.min(10, rawTW * 9 + 1));
-    // Round to 1 decimal
-    const ssR = Math.round(ss * 10) / 10;
-    const srR = Math.round(sr * 10) / 10;
-    const twR = Math.round(tw * 10) / 10;
-    const useSunrise = dayIdx === 0 && nextEvt.type === 'sunrise';
-    const combined = useSunrise
-      ? Math.round((srR * 0.6 + ssR * 0.2 + twR * 0.2) * 10) / 10
-      : Math.round((ssR * 0.6 + srR * 0.2 + twR * 0.2) * 10) / 10;
-
-    return { ss: ssR, sr: srR, tw: twR, combined };
+    const s = Math.round((day.score ?? 5.0) * 10) / 10;
+    return { ss: s, sr: s, tw: s, combined: s };
   });
 
   return days.length ? days : [{ ss: 5.0, sr: 5.0, tw: 5.0, combined: 5.0 }];
 }
 
-// ─── Per-day average score of nearest spots (used by main-screen) ───
-// Returns an array [day0avg, day1avg, …] aligned with weekData indices, or null if unavailable.
-export function calcNearbyAvgScore(spots, weekData, userLat, userLon) {
-  if (!spots?.length || !weekData?.length) return null;
-  const today = weekData[0];
-  const sunsetAz = today?._solarAzimuth ?? getSunsetAzimuth();
-  const nearest = [...spots].sort((a, b) => a.dist - b.dist).slice(0, 5);
-  // Pre-compute spot scores for all days at once
-  const spotDayArrays = nearest.map(s =>
-    calcSpotScores(s, weekData, userLat, userLon, sunsetAz, 'sunset')
-  );
-  const numDays = Math.min(5, weekData.length);
-  const result = Array.from({ length: numDays }, (_, dayIdx) => {
-    const vals = spotDayArrays.map(days => days[dayIdx]?.combined ?? null).filter(v => v !== null);
-    if (!vals.length) return null;
-    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
-  });
-  return result.some(v => v !== null) ? result : null;
+// ─── Per-day sky quality for main-screen display ────────────────────────────
+// Sky quality is uniform across all spots (same atmosphere), so return the
+// physics scores from weekData directly — no spot averaging needed.
+export function calcNearbyAvgScore(spots, weekData) {
+  if (!weekData?.length) return null;
+  return weekData.slice(0, 5).map(d => Math.round((d.score ?? 5.0) * 10) / 10);
 }
 
 // ─── Background pre-load (called by app.js right after boot) ───
@@ -375,7 +305,8 @@ export async function preloadSpotsData(weekData, loc) {
           ? 'גובה נמוך — בדוק ראות מערבית'
           : 'גובה לא ידוע — בדוק ראות מערבית';
       }
-      s._locationQuality = calcLocationQuality(s, s._bearing);
+      s._locationQualitySunset  = calcLocationQuality(s, s._bearing, 'sunset');
+      s._locationQualitySunrise = calcLocationQuality(s, s._bearing, 'sunrise');
     });
     _preloadedSpots       = spots;
     _preloadedForLat      = loc.lat;
@@ -743,8 +674,9 @@ async function loadSpots() {
           ? 'גובה נמוך — בדוק ראות מערבית'
           : 'גובה לא ידוע — בדוק ראות מערבית';
       }
-      // Must be computed after _horizonWarning (penalty depends on it)
-      s._locationQuality = calcLocationQuality(s, s._bearing);
+      // Must be computed after _horizonWarning (warning affects horizPts)
+      s._locationQualitySunset  = calcLocationQuality(s, s._bearing, 'sunset');
+      s._locationQualitySunrise = calcLocationQuality(s, s._bearing, 'sunrise');
     });
     renderBestSpotHero();
     renderSpotsList();
@@ -774,23 +706,30 @@ function getFilteredSpots() {
   }
 
   if (_sortMode === 'smart') {
-    // Blended: score 50%, potential 15%, event-facing 15%, distance 20%
-    const eventAz = getNextEvent().azimuth;
+    // Sky quality is uniform across spots — location quality is the primary differentiator.
+    // Blend: location quality 55%, sky quality 30%, distance 15%
+    const evt = getNextEvent();
     filtered.sort((a, b) => {
       const aScore = a._allScores?.[0]?.combined || 0;
       const bScore = b._allScores?.[0]?.combined || 0;
-      const aPot = (a._locationQuality || 50) / 10;
-      const bPot = (b._locationQuality || 50) / 10;
-      const aDiff = Math.abs(a._bearing - eventAz); const aNorm = aDiff > 180 ? 360 - aDiff : aDiff;
-      const bDiff = Math.abs(b._bearing - eventAz); const bNorm = bDiff > 180 ? 360 - bDiff : bDiff;
-      const aAz = aNorm <= 30 ? 10 : aNorm <= 60 ? 5 : 0;
-      const bAz = bNorm <= 30 ? 10 : bNorm <= 60 ? 5 : 0;
-      const aVal = aScore * 0.50 + aPot * 0.15 + aAz * 0.15 - (a.dist / 50) * 2;
-      const bVal = bScore * 0.50 + bPot * 0.15 + bAz * 0.15 - (b.dist / 50) * 2;
+      const aLoc = evt.type === 'sunrise'
+        ? (a._locationQualitySunrise || 50) / 10
+        : (a._locationQualitySunset  || 50) / 10;
+      const bLoc = evt.type === 'sunrise'
+        ? (b._locationQualitySunrise || 50) / 10
+        : (b._locationQualitySunset  || 50) / 10;
+      const aVal = aScore * 0.30 + aLoc * 0.55 - (a.dist / 50) * 2;
+      const bVal = bScore * 0.30 + bLoc * 0.55 - (b.dist / 50) * 2;
       return bVal - aVal;
     });
   } else if (_sortMode === 'score') {
-    filtered.sort((a, b) => (b._allScores?.[0]?.combined || 0) - (a._allScores?.[0]?.combined || 0));
+    // Sort by location quality for the current event (sky is uniform)
+    const evt = getNextEvent();
+    filtered.sort((a, b) => {
+      const aLoc = evt.type === 'sunrise' ? (a._locationQualitySunrise || 0) : (a._locationQualitySunset || 0);
+      const bLoc = evt.type === 'sunrise' ? (b._locationQualitySunrise || 0) : (b._locationQualitySunset || 0);
+      return bLoc - aLoc;
+    });
   } else {
     filtered.sort((a, b) => a.dist - b.dist);
   }
@@ -811,14 +750,20 @@ function getFilteredSpots() {
 function renderBestSpotHero() {
   const heroEl = document.getElementById('best-spot-hero');
   if (!heroEl || !_spots.length) { if (heroEl) heroEl.innerHTML = ''; return; }
-  const best = [..._spots].sort((a, b) => (b._allScores?.[0]?.combined || 0) - (a._allScores?.[0]?.combined || 0))[0];
+  const nextEvt = getNextEvent();
+  // Sort by location quality for the current event — sky quality is uniform
+  const best = [..._spots].sort((a, b) => {
+    const aLoc = nextEvt.type === 'sunrise' ? (a._locationQualitySunrise || 0) : (a._locationQualitySunset || 0);
+    const bLoc = nextEvt.type === 'sunrise' ? (b._locationQualitySunrise || 0) : (b._locationQualitySunset || 0);
+    return bLoc - aLoc;
+  })[0];
   if (!best) return;
   const sc = best._allScores?.[0] || { combined: 5.0 };
-  if (sc.combined < 5) { heroEl.innerHTML = ''; return; }
+  if (sc.combined < 4.5) { heroEl.innerHTML = ''; return; }
+  const heroLoc = nextEvt.type === 'sunrise' ? best._locationQualitySunrise : best._locationQualitySunset;
   const color = scoreToColorContinuous(sc.combined);
   const metal = scoreToMetal(sc.combined);
   const today = _weekData?.[0];
-  const nextEvt = getNextEvent();
   const heroEventTime = today ? (nextEvt.type === 'sunrise' ? today.sunrise : today.sunset) : null;
   const departure = heroEventTime ? calcDepartureTime(best._driveMin, heroEventTime, nextEvt.type) : null;
   const heroTitle = nextEvt.type === 'sunrise' ? 'הספוט הכי טוב לזריחה' : 'הספוט הכי טוב לשקיעה';
@@ -830,13 +775,18 @@ function renderBestSpotHero() {
       <div class="spot-hero-top">
         <div style="font-size:10px;color:var(--gold);font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">${heroTitle}</div>
         <div style="display:flex;align-items:center;gap:10px">
-          <div class="score-badge" style="background:${metal.gradient};border:1px solid ${color}55;color:${metal.text};position:relative;overflow:hidden;width:48px;height:48px;font-size:16px">
-            <div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div>
-            <span style="position:relative;z-index:1">${fmtScore(sc.combined)}</span>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:center">
+            <div class="score-badge" style="background:${metal.gradient};border:1px solid ${color}55;color:${metal.text};position:relative;overflow:hidden;width:44px;height:44px;font-size:15px">
+              <div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div>
+              <span style="position:relative;z-index:1">${fmtScore(sc.combined)}</span>
+            </div>
+            <div style="font-size:9px;color:var(--gold-light);text-align:center">שמיים</div>
+            <div class="score-badge score-badge-location" style="width:44px;height:36px;font-size:13px">${heroLoc ?? '—'}</div>
+            <div style="font-size:9px;color:rgba(160,185,210,0.8);text-align:center">מיקום</div>
           </div>
           <div>
             <div style="font-size:16px;font-weight:800;color:var(--cream);line-height:1.2">${esc(best.name)}</div>
-            <div style="font-size:11px;color:var(--cream-faint)">${esc(best.type)} · ${best.dist} ק"מ · <span style="color:rgba(160,185,210,0.85)">${best._locationQuality ?? '—'}/100 מיקום</span></div>
+            <div style="font-size:11px;color:var(--cream-faint)">${esc(best.type)} · ${best.dist} ק"מ · ~${best._driveMin || 0} דק׳</div>
           </div>
         </div>
       </div>
@@ -914,10 +864,21 @@ function checkGeofenceAlert(spots, todayScore) {
   const GEOFENCE_KM = 30;
   const MIN_SPOT_SCORE = 6.8;
 
-  // Find closest high-scoring spot within range
+  // Find closest high-scoring spot within range (sky quality + good location)
+  const nextEvt = getNextEvent();
   const candidate = spots
-    .filter(s => s.dist <= GEOFENCE_KM && (s._allScores?.[0]?.combined || 0) >= MIN_SPOT_SCORE)
-    .sort((a, b) => (b._allScores?.[0]?.combined || 0) - (a._allScores?.[0]?.combined || 0))[0];
+    .filter(s => {
+      const skyOk = (s._allScores?.[0]?.combined || 0) >= MIN_SPOT_SCORE;
+      const loc = nextEvt.type === 'sunrise'
+        ? (s._locationQualitySunrise || 0)
+        : (s._locationQualitySunset  || 0);
+      return s.dist <= GEOFENCE_KM && skyOk && loc >= 45;
+    })
+    .sort((a, b) => {
+      const aLoc = nextEvt.type === 'sunrise' ? (a._locationQualitySunrise || 0) : (a._locationQualitySunset || 0);
+      const bLoc = nextEvt.type === 'sunrise' ? (b._locationQualitySunrise || 0) : (b._locationQualitySunset || 0);
+      return bLoc - aLoc;
+    })[0];
 
   if (!candidate) return;
 
@@ -925,7 +886,11 @@ function checkGeofenceAlert(spots, todayScore) {
   const alertKey = 'twl_geo_' + new Date().toDateString();
   try { if (localStorage.getItem(alertKey)) return; } catch {}
 
-  const spotScore  = (candidate._allScores?.[0]?.combined || 0).toFixed(1);
+  const skyScore = (candidate._allScores?.[0]?.combined || 0).toFixed(1);
+  const locScore = nextEvt.type === 'sunrise'
+    ? (candidate._locationQualitySunrise || 0)
+    : (candidate._locationQualitySunset  || 0);
+  const spotScore = `שמיים ${skyScore}/10 · מיקום ${locScore}/100`;
   const distLabel  = candidate.dist < 1 ? 'פחות מ-1 ק"מ' : `${candidate.dist} ק"מ`;
 
   const nextEvt = getNextEvent();
@@ -933,7 +898,7 @@ function checkGeofenceAlert(spots, todayScore) {
 
   navigator.serviceWorker.ready.then(reg => {
     reg.showNotification(`TWILIGHT · ${eventLabel}`, {
-      body:    `${candidate.name} — ציון ${spotScore}/10 · ${distLabel} ממך`,
+      body:    `${candidate.name} — ${spotScore} · ${distLabel} ממך`,
       icon:    './images/sunset.png',
       badge:   './images/icon-192.png',
       dir:     'rtl',
@@ -987,6 +952,9 @@ function renderSpotsList() {
     const fav = isFavorite(s.name, s.lat, s.lon);
     const vis = isVisited(s.name, s.lat, s.lon);
     const departure = eventTime ? calcDepartureTime(driveMin, eventTime, nextEvt.type) : null;
+    const locationBadgeVal = nextEvt.type === 'sunrise'
+      ? s._locationQualitySunrise
+      : s._locationQualitySunset;
     const best = bestDayLabel(scores);
 
     const westOK = isWestFacing(bearing), eastOK = isEastFacing(bearing);
@@ -1022,7 +990,7 @@ function renderSpotsList() {
               </div>
               <div>
                 <div class="score-badge score-badge-location">
-                  <span style="font-size:12px;font-weight:700">${s._locationQuality ?? '—'}</span>
+                  <span style="font-size:12px;font-weight:700">${locationBadgeVal ?? '—'}</span>
                 </div>
                 <div style="font-size:9px;text-align:center;color:rgba(160,185,210,0.8);margin-top:2px">מיקום</div>
               </div>
@@ -1063,26 +1031,26 @@ function renderSpotsList() {
           <div class="spot-expand-inner">
             <div class="spot-scores-row">
               <div class="spot-score-cell">
-                ${logoImg('sunrise', 18)}
-                <div class="spot-score-num" style="color:${scoreToColorContinuous(sc.sr)}">${fmtScore(sc.sr)}<span>/10</span></div>
-                <div class="spot-score-lbl">זריחה</div>
+                ${logoImg('sunset', 18)}
+                <div class="spot-score-num" style="color:rgba(160,185,210,0.9)">${s._locationQualitySunset ?? '—'}<span>/100</span></div>
+                <div class="spot-score-lbl">שקיעה מיקום</div>
               </div>
               <div class="spot-score-cell spot-score-cell-main">
-                ${logoImg('sunset', 18)}
-                <div class="spot-score-num" style="color:${scoreToColorContinuous(sc.ss)}">${fmtScore(sc.ss)}<span>/10</span></div>
-                <div class="spot-score-lbl">שקיעה</div>
+                <svg width="18" height="18" fill="none" stroke="var(--gold-light)" stroke-width="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                <div class="spot-score-num" style="color:${scoreToColorContinuous(sc.combined)}">${fmtScore(sc.combined)}<span>/10</span></div>
+                <div class="spot-score-lbl">שמיים</div>
               </div>
               <div class="spot-score-cell">
-                ${logoImg('twilight', 18)}
-                <div class="spot-score-num" style="color:${scoreToColorContinuous(sc.tw)}">${fmtScore(sc.tw)}<span>/10</span></div>
-                <div class="spot-score-lbl">דמדומים</div>
+                ${logoImg('sunrise', 18)}
+                <div class="spot-score-num" style="color:rgba(160,185,210,0.9)">${s._locationQualitySunrise ?? '—'}<span>/100</span></div>
+                <div class="spot-score-lbl">זריחה מיקום</div>
               </div>
             </div>
 
             <div class="fx-grid spot-info-grid">
-              <div class="fx-cell"><div class="fx-cell-lbl">ניקוד מיקום</div><div class="fx-cell-val" style="color:rgba(160,185,210,0.9)">${s._locationQuality ?? '—'}<span style="font-size:10px;font-weight:400;color:var(--cream-faint)">/100</span></div><div class="fx-cell-sub">קבוע</div></div>
               <div class="fx-cell"><div class="fx-cell-lbl">כיוון</div><div class="fx-cell-val">${dirLabel}</div><div class="fx-cell-sub">${Math.round(bearing)}°</div></div>
               <div class="fx-cell"><div class="fx-cell-lbl">גובה</div><div class="fx-cell-val">${s.elevation || '—'}</div><div class="fx-cell-sub">${s.elevation ? 'מטר' : ''}</div></div>
+              <div class="fx-cell"><div class="fx-cell-lbl">נסיעה</div><div class="fx-cell-val">~${driveMin}</div><div class="fx-cell-sub">דק׳</div></div>
             </div>
 
             ${s._horizonWarning ? `

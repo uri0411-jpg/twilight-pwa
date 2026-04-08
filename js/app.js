@@ -256,8 +256,9 @@ async function handleRefresh() {
       calcWeekData(weather, _airQuality, freshLoc.lat, freshLoc.lon, westData),
       freshLoc
     );
+    const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
-    await initMainScreen(_loc, _city, _weekData);
+    await initMainScreen(_loc, _city, _weekData, spotAvgScores);
     showToast('נתונים עודכנו', 'success');
 
     _spotsInitialized = false;
@@ -294,8 +295,9 @@ async function handleSetLocation(e) {
     ]);
     _airQuality = airQ;
     _weekData = calcWeekData(weather, _airQuality, lat, lon, westData);
+    const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
-    await initMainScreen(_loc, _city, _weekData);
+    await initMainScreen(_loc, _city, _weekData, spotAvgScores);
     updateThemeColor(_weekData);
     showToast(`מיקום עודכן: ${_city}`, 'success');
 
