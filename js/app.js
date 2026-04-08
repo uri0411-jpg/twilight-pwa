@@ -86,17 +86,19 @@ let _isRefreshing        = false; // FIX: debounce guard for refresh
 async function boot() {
   registerSW();
   window.addEventListener('twilight:updateReady', () => {
+    // Auto-reload when a new SW takes control. A brief banner shows
+    // what's happening so users aren't surprised by the refresh.
     const banner = document.createElement('div');
     banner.id = 'update-banner';
     banner.style.cssText = [
       'position:fixed;top:0;left:0;right:0;z-index:9999',
       'background:var(--amber);color:#fff;text-align:center',
-      'padding:10px 16px;cursor:pointer;font-size:14px;font-weight:600',
+      'padding:10px 16px;font-size:14px;font-weight:600',
       'box-shadow:0 2px 8px rgba(0,0,0,0.3);direction:rtl',
     ].join(';');
-    banner.textContent = 'גרסה חדשה זמינה — לחץ לעדכון';
-    banner.onclick = () => location.reload();
+    banner.textContent = 'גרסה חדשה — מעדכן…';
     document.body.appendChild(banner);
+    setTimeout(() => location.reload(), 800);
   });
   clearExpired();
   rearmSavedAlerts();
