@@ -14,7 +14,7 @@ import { showToast, showLoading }              from './ui.js';
 import { registerSW }                          from './sw-register.js';
 import { clearExpired, getCacheAge }           from './cache.js';
 import { recordPrediction, fetchActualForDate, getUnfilledDates, processLearningForEntry } from './calibration.js';
-import { seedFromBacktest, getLearningStats }  from './engine/learningEngine.js';
+import { seedFromBacktest, getLearningStats, pinLearningSnapshot }  from './engine/learningEngine.js';
 import { initInstallPrompt }                   from './install-prompt.js';
 import { rearmSavedAlerts }                    from './notifications.js';
 import { scoreToColorContinuous, scoreToLabel } from './utils.js';
@@ -186,6 +186,13 @@ async function loadAppData() {
   }
 
   await autoSeedIfNeeded();
+
+  // Freeze learning adjustments for the session BEFORE the first calcWeekData.
+  // The async processLearningForEntry pipeline (lines below) mutates
+  // localStorage state in the background; without this pin, refresh and
+  // setLocation paths would pick up post-mutation adjustments and produce
+  // higher scores than the cold boot ("fantastic scores on refresh" bug).
+  pinLearningSnapshot();
 
   const [weather, airQ, westData, nearbySpots] = await Promise.all([
     fetchWeek(_loc.lat, _loc.lon),

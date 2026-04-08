@@ -901,7 +901,6 @@ function checkGeofenceAlert(spots, todayScore) {
   const spotScore = `שמיים ${skyScore}/10 · מיקום ${locScore}/100`;
   const distLabel  = candidate.dist < 1 ? 'פחות מ-1 ק"מ' : `${candidate.dist} ק"מ`;
 
-  const nextEvt = getNextEvent();
   const eventLabel = nextEvt.type === 'sunrise' ? 'זריחה מעולה מחר בבוקר 🌅' : 'שקיעה מעולה היום 🌅';
 
   navigator.serviceWorker.ready.then(reg => {

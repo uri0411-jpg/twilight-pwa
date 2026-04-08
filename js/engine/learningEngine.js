@@ -39,6 +39,12 @@ const WEIGHT_TARGET_SUM = 0.84; // 0.30+0.27+0.27 — must stay constant
 // ─── Module-level adjustment cache ────────────
 let _adjCache     = null;
 let _adjCacheTime = 0;
+// Session pin: when set, getLearningAdjustments returns this snapshot and
+// ignores any localStorage mutations from async processLearningEntry. This
+// prevents score drift between cold boot and refresh/setLocation within
+// a single session. Set once from app.js loadAppData(); cleared by
+// clearLearningData() and on full page reload (module re-evaluation).
+let _pinnedAdj    = null;
 
 // ─── Helpers ──────────────────────────────────
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
@@ -332,15 +338,12 @@ export function processLearningEntry(calibEntry, locBucket) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-//  getLearningAdjustments
-//  Called by score.js to retrieve current learned corrections.
-//  Returns defaults (no-op) when sampleSize < MIN_ACTIVE_SAMPLES.
-//  Cached for ADJ_CACHE_TTL ms — called up to 3× per calcDayData().
+//  _computeAdjustments — read current learning state from localStorage
+//  and project it into the adjustment shape consumed by score.js.
+//  Internal helper, not exported. Used by both getLearningAdjustments
+//  (with TTL caching) and pinLearningSnapshot (forced fresh read).
 // ─────────────────────────────────────────────────────────────────
-export function getLearningAdjustments(lat, lon, month) { // eslint-disable-line no-unused-vars
-  const now = Date.now();
-  if (_adjCache && (now - _adjCacheTime) < ADJ_CACHE_TTL) return _adjCache;
-
+function _computeAdjustments() {
   const { state, entries } = loadLearning();
   const active = state.sampleSize >= MIN_ACTIVE_SAMPLES;
 
@@ -356,7 +359,7 @@ export function getLearningAdjustments(lat, lon, month) { // eslint-disable-line
   const calibrationConfidence = Math.min(1, validatedSamples / 15);
   const confidence            = calibrationConfidence * 0.7 + activationLevel * 0.3;
 
-  const adj = {
+  return {
     inputScales: {
       cloudScale:      active ? state.cloudInputScale      : 1.0,
       humidityScale:   active ? state.humidityInputScale   : 1.0,
@@ -383,10 +386,48 @@ export function getLearningAdjustments(lat, lon, month) { // eslint-disable-line
     sampleSize:  state.sampleSize,
     active,
   };
+}
 
-  _adjCache     = adj;
+// ─────────────────────────────────────────────────────────────────
+//  getLearningAdjustments
+//  Called by score.js to retrieve current learned corrections.
+//  Returns defaults (no-op) when sampleSize < MIN_ACTIVE_SAMPLES.
+//  Pin precedence: if pinLearningSnapshot() was called this session,
+//  return the frozen snapshot — async processLearningEntry mutations
+//  to localStorage do not leak into mid-session calcWeekData calls.
+//  Otherwise: cached for ADJ_CACHE_TTL ms — called up to 3× per calcDayData().
+// ─────────────────────────────────────────────────────────────────
+export function getLearningAdjustments(lat, lon, month) { // eslint-disable-line no-unused-vars
+  if (_pinnedAdj) return _pinnedAdj;
+
+  const now = Date.now();
+  if (_adjCache && (now - _adjCacheTime) < ADJ_CACHE_TTL) return _adjCache;
+
+  _adjCache     = _computeAdjustments();
   _adjCacheTime = now;
-  return adj;
+  return _adjCache;
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  pinLearningSnapshot
+//  Freeze the current learning adjustments for the rest of the session.
+//  Subsequent getLearningAdjustments() calls return this snapshot until
+//  unpinLearningSnapshot() or clearLearningData() is invoked, or until
+//  the page is reloaded (module memory reset).
+//
+//  Called once from app.js loadAppData() AFTER autoSeedIfNeeded() and
+//  BEFORE calcWeekData(). This ensures all calcWeekData calls within a
+//  session — cold boot, refresh button, location search — see identical
+//  learning state, eliminating score drift caused by the async
+//  processLearningForEntry pipeline mutating cloudInputScale et al.
+// ─────────────────────────────────────────────────────────────────
+export function pinLearningSnapshot() {
+  _pinnedAdj = _computeAdjustments();
+  return _pinnedAdj;
+}
+
+export function unpinLearningSnapshot() {
+  _pinnedAdj = null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -481,7 +522,8 @@ export function getLearningStats() {
 export function clearLearningData() {
   try {
     localStorage.removeItem(LEARNING_KEY);
-    _adjCache = null;
+    _adjCache  = null;
+    _pinnedAdj = null; // also drop session pin so the cleared state takes effect immediately
   } catch (e) {
     console.warn('[learning] clear failed:', e);
   }
