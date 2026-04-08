@@ -6,13 +6,14 @@
 export function registerSW() {
   if (!('serviceWorker' in navigator)) return;
 
-  // Auto-reload when a new SW takes control (after skipWaiting + clients.claim)
+  // When a new SW takes control, notify the user via banner instead of force-reloading.
+  // networkFirst strategy ensures fresh code on next load — no need to disrupt the session.
   let _reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (_reloaded) return;
     _reloaded = true;
-    console.log('[SW] New controller — reloading');
-    location.reload();
+    console.log('[SW] New controller — notifying user');
+    window.dispatchEvent(new CustomEvent('twilight:updateReady'));
   });
 
   window.addEventListener('load', async () => {

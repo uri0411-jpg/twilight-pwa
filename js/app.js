@@ -84,6 +84,19 @@ let _isRefreshing        = false; // FIX: debounce guard for refresh
 // ─────────────────────────────────────────
 async function boot() {
   registerSW();
+  window.addEventListener('twilight:updateReady', () => {
+    const banner = document.createElement('div');
+    banner.id = 'update-banner';
+    banner.style.cssText = [
+      'position:fixed;top:0;left:0;right:0;z-index:9999',
+      'background:var(--amber);color:#fff;text-align:center',
+      'padding:10px 16px;cursor:pointer;font-size:14px;font-weight:600',
+      'box-shadow:0 2px 8px rgba(0,0,0,0.3);direction:rtl',
+    ].join(';');
+    banner.textContent = 'גרסה חדשה זמינה — לחץ לעדכון';
+    banner.onclick = () => location.reload();
+    document.body.appendChild(banner);
+  });
   clearExpired();
   rearmSavedAlerts();
   initNav();
@@ -247,9 +260,9 @@ async function handleRefresh() {
     saveLocation(freshLoc.lat, freshLoc.lon, _city);
 
     const [weather, airQ, westData] = await Promise.all([
-      fetchWeek(freshLoc.lat, freshLoc.lon),
-      fetchAirQuality(freshLoc.lat, freshLoc.lon).catch(() => null),
-      fetchWesternHorizon(freshLoc.lat, freshLoc.lon).catch(() => null)
+      fetchWeek(freshLoc.lat, freshLoc.lon, true),
+      fetchAirQuality(freshLoc.lat, freshLoc.lon, true).catch(() => null),
+      fetchWesternHorizon(freshLoc.lat, freshLoc.lon, true).catch(() => null)
     ]);
     _airQuality = airQ;
     _weekData = _applyScoreEMA(
@@ -289,9 +302,9 @@ async function handleSetLocation(e) {
     saveLocation(lat, lon, _city);
 
     const [weather, airQ, westData] = await Promise.all([
-      fetchWeek(lat, lon),
-      fetchAirQuality(lat, lon).catch(() => null),
-      fetchWesternHorizon(lat, lon).catch(() => null)
+      fetchWeek(lat, lon, true),
+      fetchAirQuality(lat, lon, true).catch(() => null),
+      fetchWesternHorizon(lat, lon, true).catch(() => null)
     ]);
     _airQuality = airQ;
     _weekData = calcWeekData(weather, _airQuality, lat, lon, westData);

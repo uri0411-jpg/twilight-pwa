@@ -757,10 +757,13 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     }
   })();
 
-  // Use engineResult when available; fall back to legacy composite
-  const score = engineResult
+  // Use engineResult when available; fall back to legacy sunset score.
+  // effectiveSsScore is what the detail view displays — composite is derived
+  // from it so list score and detail scores stay in sync.
+  const effectiveSsScore = engineResult
     ? Math.round((engineResult.score / 10) * 10) / 10   // 0–100 → 1–10
-    : Math.round((ssScore * 0.6 + twScore * 0.25 + srScore * 0.15) * 10) / 10;
+    : ssScore;
+  const score = Math.round((effectiveSsScore * 0.6 + twScore * 0.25 + srScore * 0.15) * 10) / 10;
 
   const dramaLevel = ssResult.drama;
 
@@ -825,7 +828,7 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
 
   const dayData = {
     date, day: dateToHebDay(date), shortDate: shortDate(date),
-    score, srScore, ssScore, twScore, dramaLevel, goldenHourMin,
+    score, srScore, ssScore: effectiveSsScore, twScore, dramaLevel, goldenHourMin,
     certainty: ssResult.certainty,
     scoreColor: scoreToColorContinuous(score),
     scoreLabel: scoreToLabel(score),

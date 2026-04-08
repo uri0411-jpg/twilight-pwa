@@ -82,10 +82,10 @@ function averageHourlyArrays(datasets, key) {
  * Primary: best_match (auto), Secondary: ECMWF IFS, Tertiary: GFS
  * Falls back to primary-only if secondaries fail
  */
-export async function fetchWeek(lat, lon) {
+export async function fetchWeek(lat, lon, force = false) {
   const cacheKey = `weather_${lat.toFixed(3)}_${lon.toFixed(3)}`;
   const cached = getCache(cacheKey);
-  if (cached) return cached;
+  if (cached && !force) return cached;
 
   // Fetch primary + secondaries in parallel — if primary (best_match) fails,
   // fall back to whichever secondary model responded, then to stale cache.
@@ -143,10 +143,10 @@ export async function fetchWeek(lat, lon) {
  * Fetch air quality data (dust, PM2.5, PM10, aerosol optical depth)
  * Open-Meteo Air Quality API — free, no key
  */
-export async function fetchAirQuality(lat, lon) {
+export async function fetchAirQuality(lat, lon, force = false) {
   const cacheKey = `airq_${lat.toFixed(3)}_${lon.toFixed(3)}`;
   const cached = getCache(cacheKey);
-  if (cached) return cached;
+  if (cached && !force) return cached;
 
   const params = new URLSearchParams({
     latitude: lat, longitude: lon,
@@ -283,11 +283,11 @@ export async function fetchSpots(lat, lon, radiusKm = 25) {
  * Used to detect low clouds blocking the sunset light path.
  * Same Open-Meteo API, no auth, fetched in parallel with fetchWeek.
  */
-export async function fetchWesternHorizon(lat, lon) {
+export async function fetchWesternHorizon(lat, lon, force = false) {
   const lonWest = Math.max(-180, lon - 0.5); // ~44km west at lat 32°
   const cacheKey = `west_${lat.toFixed(3)}_${lonWest.toFixed(3)}`;
   const cached = getCache(cacheKey);
-  if (cached) return cached;
+  if (cached && !force) return cached;
 
   const params = new URLSearchParams({
     latitude: lat, longitude: lonWest,
