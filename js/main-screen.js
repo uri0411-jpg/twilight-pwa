@@ -40,6 +40,7 @@ let _stopCompass = null;       // cleanup for DeviceOrientation listener
 let _stopLiveGradient = null;  // cleanup for real-time gradient interval
 let _countdownInterval = null;
 let _compareIdx = -1; // index of first day selected for comparison
+let _mainEventsAC = null; // AbortController for #screen-main delegated listeners
 
 // ─────────────────────────────────────────
 //  Real-time sky gradient (30 s interval)
@@ -1019,6 +1020,10 @@ function renderDailyCards(weekData) {
 //  Event handlers
 // ─────────────────────────────────────────
 function attachMainEvents() {
+  // Abort any listeners attached during the previous render
+  if (_mainEventsAC) _mainEventsAC.abort();
+  _mainEventsAC = new AbortController();
+  const { signal } = _mainEventsAC;
   // ─── Quick-alert FAB — thumb-zone shortcut for 30-min pre-sunset alert ───
   const fab     = document.getElementById('quick-alert-fab');
   const today   = _weekData[0];
@@ -1113,11 +1118,11 @@ function attachMainEvents() {
     if (e.key === 'Enter') doLocationSearch();
   });
 
-  // GPS button — same as refresh but re-detect location
+  // GPS button — re-detect location then refresh
   searchGps?.addEventListener('click', () => {
     searchBar.classList.remove('open');
     cityDisplay.style.visibility = '';
-    window.dispatchEvent(new CustomEvent('twilight:refresh'));
+    window.dispatchEvent(new CustomEvent('twilight:refresh', { detail: { gps: true } }));
   });
 
   // ─── Score gauge tap → Tier-2 explainer tray ───
@@ -1145,6 +1150,7 @@ function attachMainEvents() {
   }
 
   // ─── Alert chip clicks (delegated) ───
+  // Uses AbortController signal so the listener is removed on next initMainScreen call.
   document.getElementById('screen-main')?.addEventListener('click', async (e) => {
     const chip = e.target.closest('.alert-chip');
     if (!chip) return;
@@ -1182,7 +1188,7 @@ function attachMainEvents() {
       _refreshBellState(date);
       window.dispatchEvent(new CustomEvent('twilight:toast', { detail: { msg: `התראה נקבעה ${minNum} דק׳ לפני ${label}`, type: 'success' } }));
     }
-  });
+  }, { signal });
 }
 
 function _refreshBellState(date) {

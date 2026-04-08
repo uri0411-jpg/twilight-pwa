@@ -247,27 +247,39 @@ async function loadAppData() {
 
 // ─────────────────────────────────────────
 //  Refresh handler
-//  FIX: _isRefreshing flag prevents double-fire on rapid clicks
+//  Refreshes weather data for the current saved location.
+//  Only re-detects GPS when event carries { detail: { gps: true } }
+//  (GPS button in location search bar).
 // ─────────────────────────────────────────
-async function handleRefresh() {
+async function handleRefresh(e) {
   if (_isRefreshing) return;
   _isRefreshing = true;
   showLoading(true);
   try {
-    const freshLoc = await getGPS();
-    _loc  = freshLoc;
-    _city = await fetchCityName(freshLoc.lat, freshLoc.lon);
-    saveLocation(freshLoc.lat, freshLoc.lon, _city);
+    // Re-detect GPS only when explicitly requested (GPS button).
+    // Normal refresh uses the saved location to avoid coordinate drift
+    // that would create a stale EMA pin at a slightly different lat/lon key.
+    if (e?.detail?.gps) {
+      const freshLoc = await getGPS();
+      _loc  = freshLoc;
+      _city = await fetchCityName(freshLoc.lat, freshLoc.lon);
+      saveLocation(freshLoc.lat, freshLoc.lon, _city);
+    }
+
+    // Clear the EMA score pin so a forced refresh always shows fresh scores
+    // without smoothing from a previous session.
+    const pinKey = `${_SCORE_PIN_KEY}_${_loc.lat.toFixed(2)}_${_loc.lon.toFixed(2)}`;
+    localStorage.removeItem(pinKey);
 
     const [weather, airQ, westData] = await Promise.all([
-      fetchWeek(freshLoc.lat, freshLoc.lon, true),
-      fetchAirQuality(freshLoc.lat, freshLoc.lon, true).catch(() => null),
-      fetchWesternHorizon(freshLoc.lat, freshLoc.lon, true).catch(() => null)
+      fetchWeek(_loc.lat, _loc.lon, true),
+      fetchAirQuality(_loc.lat, _loc.lon, true).catch(() => null),
+      fetchWesternHorizon(_loc.lat, _loc.lon, true).catch(() => null)
     ]);
     _airQuality = airQ;
     _weekData = _applyScoreEMA(
-      calcWeekData(weather, _airQuality, freshLoc.lat, freshLoc.lon, westData),
-      freshLoc
+      calcWeekData(weather, _airQuality, _loc.lat, _loc.lon, westData),
+      _loc
     );
     const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
@@ -286,6 +298,7 @@ async function handleRefresh() {
   }
 }
 
+
 // ─────────────────────────────────────────
 //  Manual location handler
 //  Triggered by twilight:setLocation custom event
@@ -301,13 +314,18 @@ async function handleSetLocation(e) {
     _city = city || 'מיקום מותאם';
     saveLocation(lat, lon, _city);
 
+    // Clear EMA pin for the new location so scores aren't smoothed against
+    // a previous session's data at a different spot.
+    const pinKey = `${_SCORE_PIN_KEY}_${lat.toFixed(2)}_${lon.toFixed(2)}`;
+    localStorage.removeItem(pinKey);
+
     const [weather, airQ, westData] = await Promise.all([
       fetchWeek(lat, lon, true),
       fetchAirQuality(lat, lon, true).catch(() => null),
       fetchWesternHorizon(lat, lon, true).catch(() => null)
     ]);
     _airQuality = airQ;
-    _weekData = calcWeekData(weather, _airQuality, lat, lon, westData);
+    _weekData = _applyScoreEMA(calcWeekData(weather, _airQuality, lat, lon, westData), _loc);
     const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
     await initMainScreen(_loc, _city, _weekData, spotAvgScores);
