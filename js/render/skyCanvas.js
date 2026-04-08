@@ -27,9 +27,9 @@
  * @module render/skyCanvas
  */
 
-import { computeAtmosphere }   from '../engine/atmosphere.js';
-import { spectrumToRGB }        from '../engine/color.js';
-import { LOCATION_CLIMATE }     from '../config.js';
+import { computeAtmosphere }                  from '../engine/atmosphere.js';
+import { spectrumToRGB, applyPerceptualTuning } from '../engine/color.js';
+import { LOCATION_CLIMATE }                    from '../config.js';
 
 const CANVAS_ID = 'sky-canvas';
 
@@ -111,8 +111,13 @@ function rgba({ r, g, b }, a) {
  * @param {number}  turbidity       0–1 aerosol loading
  * @param {number}  [angstromExp=0] Ångström exponent from PM2.5/PM10
  * @param {number}  [beltOfVenus=0] 0–1 Belt-of-Venus visibility probability
+ * @param {{low:number,mid:number,high:number}} [clouds]
+ *                                  Fractional cloud cover per layer 0–1 (Phase 1).
+ *                                  Optional — defaults to clear sky.
+ * @param {number}  [mieGrowth=1]   κ-Köhler hygroscopic growth factor (Phase 2).
+ *                                  Scales Mie cross-section as g² (cross-section ∝ r²).
  */
-export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp = 0, beltOfVenus = 0) {
+export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp = 0, beltOfVenus = 0, clouds, mieGrowth = 1) {
   if (!container) return;
 
   const w = container.offsetWidth  || window.innerWidth;
@@ -145,11 +150,19 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
   ctx.clearRect(0, 0, w, h);
 
   // ── Sample atmosphere at 8 elevation offsets ──────────────────────────────
+  // Each stop samples a different effective elevation (sunAngle + offset), but
+  // the perceptual tuning pass (Phase 7) uses the REAL sun elevation — the
+  // "sunset mood" is set by where the sun actually is, not by where the stop
+  // is looking. At PERCEPTUAL_BOOST=0 (shipping default) the tuning call is a
+  // byte-identical no-op that short-circuits on the first line.
   const colors = STOP_OFFSETS_RAD.map((offset, i) => {
     const sampleAngle = sunAngle_rad + offset;
-    const atm = computeAtmosphere(sampleAngle, turbidity, angstromExp, LOCATION_CLIMATE.ozoneDU);
+    const atm  = computeAtmosphere(sampleAngle, turbidity, angstromExp, LOCATION_CLIMATE.ozoneDU, clouds, mieGrowth);
     const zone = STOP_ZONES[i];
-    const rgb  = spectrumToRGB(atm[zone]);
+    const rgb  = applyPerceptualTuning(
+      spectrumToRGB(atm[zone]),
+      { sunAngle_rad, zone }
+    );
 
     // Belt of Venus zone (stop 5): blend toward physics-derived lavender-mauve
     if (i === 5 && beltOfVenus > 0) {

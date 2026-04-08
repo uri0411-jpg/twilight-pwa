@@ -74,6 +74,80 @@ export function airMass(solarElevationDeg) {
   return 1 / (Math.sin(hRad) + 0.50572 * Math.pow(h + 6.07995, -1.6364));
 }
 
+// ─── Phase 2: Hygroscopic growth (κ-Köhler) ─────────────────────────────────
+
+/**
+ * κ-Köhler hygroscopic growth factor g(RH).
+ *
+ * Wet aerosol particles swell as relative humidity rises. κ-Köhler theory
+ * gives the equilibrium wet-to-dry radius ratio as:
+ *
+ *     g(RH) = (1 + κ · RH/(1-RH))^(1/3)
+ *
+ * with κ ≈ 0.6 for a continental mixture (roughly: 0.1 for dust, 0.6 for
+ * sea salt, 1.2 for pure sulphate). The cube-root comes from volume growth
+ * being linear in water uptake, converted back to radius.
+ *
+ * Mie scattering cross-section scales with radius squared, so the effective
+ * Mie coefficient in atmosphere.js multiplies by g² (see `mieBeta`).
+ *
+ * The RH is capped at 95% — κ-Köhler diverges as RH→100% and at the
+ * cap-value g ≈ 2.5–3.0, which matches measured maritime values. Without
+ * the cap we'd produce non-physical growth factors during fog events.
+ *
+ * Reference:
+ *   Petters & Kreidenweis (2007), "A single parameter representation of
+ *   hygroscopic growth and cloud condensation nucleus activity".
+ *
+ * @param {number} rhFrac  Relative humidity as a fraction 0–1
+ * @param {number} [kappa=0.6]  κ value for the aerosol mixture
+ * @returns {number}  Growth factor g ≥ 1 (g=1 at RH=0)
+ */
+export function hygroscopicGrowth(rhFrac, kappa = 0.6) {
+  const rh = Math.min(Math.max(rhFrac, 0), 0.95);
+  return Math.cbrt(1 + kappa * rh / (1 - rh));
+}
+
+/**
+ * Humidity-adjusted Ångström exponent.
+ *
+ * Dry continental aerosol populations are dominated by fine particles (α ≈
+ * 1.3 — spectrally selective, blue-biased). Maritime aerosol populations —
+ * sea salt, wetted dust — are coarse (α ≈ 0.3 — near wavelength-independent).
+ *
+ * As RH rises, fine particles grow and become effectively coarse, shifting
+ * the population-average Ångström exponent toward the maritime value.
+ * We model this as a linear interpolation in RH:
+ *
+ *     α_effective(RH) = α_dry − (α_dry − α_wet) · min(RH, 0.9)
+ *
+ * Defaults: α_dry = 1.3, α_wet = 0.3 (so the shift is 1.0·RH). This matches
+ * AERONET observations of continental-vs-maritime stations.
+ *
+ * @param {number} rhFrac          Relative humidity as a fraction 0–1
+ * @param {number} [alphaDry=1.3]  Dry continental α
+ * @param {number} [alphaWet=0.3]  Wet maritime α
+ * @returns {number}               Effective α for Mie
+ */
+export function angstromFromHumidity(rhFrac, alphaDry = 1.3, alphaWet = 0.3) {
+  const rh = Math.min(Math.max(rhFrac, 0), 0.9);
+  return alphaDry - (alphaDry - alphaWet) * rh;
+}
+
+// ── Phase 2 rollout weight ────────────────────────────────────────────────────
+//
+// PHASE2_HUMIDITY_WEIGHT damps the effective humidity-driven Mie response so
+// the visible change stays inside the Phase-2 visual parity budget. 0 = no
+// Phase-2 effect (byte-identical to pre-Phase-2), 1 = full κ-Köhler growth +
+// full maritime α shift. We ship at 0.3 for the initial rollout — enough to
+// make wet air visibly different (hazy sunset, overcast stratus) without
+// blowing the budget on scenarios where Phase 1 afterglow already stacks
+// (e.g. cirrus_afterglow). Raise gradually once perceptual QA signs off.
+//
+// Damping is applied to the *excess* of each quantity so the no-humidity
+// case (rh=0) still produces g=1 and α=0 exactly.
+export const PHASE2_HUMIDITY_WEIGHT = 0.3;
+
 // ─── Main Export ────────────────────────────────────────────────────────────
 
 /**
@@ -92,6 +166,8 @@ export function airMass(solarElevationDeg) {
  *   mieIntensity: number,         // 0-1 strength of Mie forward-scatter
  *   rayleighSpread: number,       // 0-1 quality of broad-sky color gradient
  *   atmosphericClarity: number,   // 0-1 Beer-Lambert transmittance proxy
+ *   mieGrowthFactor: number,      // κ-Köhler wet/dry radius ratio (Phase 2)
+ *   angstromEffective: number,    // humidity-adjusted Ångström exponent (Phase 2)
  *   contributions: Object         // per-input contribution breakdown
  * }}
  */
@@ -245,11 +321,41 @@ export function computeScattering({
   contributions.airMass = m;
   contributions.effectiveOpticalPath = effectiveOpticalPath;
 
+  // ── 6. Phase 2: Humidity-driven Mie parameters ─────────────────────────
+  //
+  // `turbidity` above already folds humidity into a composite weight.
+  // Phase 2 adds two *physically direct* outputs that atmosphere.js will
+  // consume to modulate Mie scattering per-wavelength:
+  //
+  //   mieGrowthFactor  — κ-Köhler wet/dry radius ratio g(RH). Mie cross-
+  //                      section ∝ r², so atmosphere.js multiplies β_Mie
+  //                      by g² when evaluating the Beer-Lambert term.
+  //   angstromEffective — humidity-shifted Ångström exponent. Tracks the
+  //                       continental-to-maritime shift in population
+  //                       mean particle size as RH rises.
+  //
+  // When humidity is missing we emit safe defaults (g=1, α=0) that are
+  // byte-identical to pre-Phase-2 behaviour — atmosphere.js treats these
+  // as no-ops.
+  const rhFrac = humidity != null ? clamp(humidity / 100, 0, 1) : null;
+  // Phase 2 rollout: damp the growth excess and α shift by PHASE2_HUMIDITY_WEIGHT.
+  // When weight=0 this block is a no-op (g=1, α=0); when weight=1 the full
+  // κ-Köhler + maritime shift is applied.
+  const _rawG     = rhFrac != null ? hygroscopicGrowth(rhFrac)    : 1;
+  const _rawAlpha = rhFrac != null ? angstromFromHumidity(rhFrac) : 0;
+  const mieGrowthFactor   = 1 + (_rawG - 1) * PHASE2_HUMIDITY_WEIGHT;
+  const angstromEffective = _rawAlpha * PHASE2_HUMIDITY_WEIGHT;
+
+  contributions.mieGrowthFactor   = mieGrowthFactor;
+  contributions.angstromEffective = angstromEffective;
+
   return {
     turbidity,
     mieIntensity,
     rayleighSpread,
     atmosphericClarity,
+    mieGrowthFactor,
+    angstromEffective,
     contributions,
   };
 }

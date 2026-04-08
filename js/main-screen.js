@@ -43,6 +43,21 @@ let _compareIdx = -1; // index of first day selected for comparison
 let _mainEventsAC = null; // AbortController for #screen-main delegated listeners
 
 // ─────────────────────────────────────────
+//  Cloud fractions for physics (Phase 1)
+// ─────────────────────────────────────────
+// dayData carries raw cloud cover per layer as percentages (0–100) in
+// _cloudLowRaw / _cloudMidRaw / _cloudHighRaw (set by score.js). Convert
+// to the 0–1 fractions that atmosphere.js expects, defaulting to all-zero
+// when a day is missing cloud data (backward-compatible clear sky).
+function cloudFractionsFor(day) {
+  return {
+    low:  Math.max(0, Math.min(1, (day?._cloudLowRaw  ?? 0) / 100)),
+    mid:  Math.max(0, Math.min(1, (day?._cloudMidRaw  ?? 0) / 100)),
+    high: Math.max(0, Math.min(1, (day?._cloudHighRaw ?? 0) / 100)),
+  };
+}
+
+// ─────────────────────────────────────────
 //  Real-time sky gradient (30 s interval)
 // ─────────────────────────────────────────
 
@@ -85,8 +100,10 @@ function startLiveGradient(today, loc) {
           mieIntensity:   today.mieIntensity   ?? 0.5,
           rayleighSpread: today.rayleighSpread  ?? 0.5,
           humidity:       today._humidityRaw   ?? 50,
-          angstromExp:    0,
+          angstromExp:    today.angstromExp    ?? 0,
           ozoneDU:        today.ozoneDU        ?? 300,
+          clouds:         cloudFractionsFor(today),
+          mieGrowth:      today.mieGrowthFactor ?? 1,
         });
       } catch (_) {
         // Silently fall back to pre-computed skyColors
@@ -145,8 +162,10 @@ function startLiveGradient(today, loc) {
         homeContent,
         liveElevDeg * (Math.PI / 180),
         today.turbidity  ?? 0.3,
-        0,
-        today.goldenWindow?.beltOfVenus || 0
+        today.angstromExp ?? 0,
+        today.goldenWindow?.beltOfVenus || 0,
+        cloudFractionsFor(today),
+        today.mieGrowthFactor ?? 1,
       );
     }
     if (homeContent && today._solarAzimuth != null) {
@@ -199,8 +218,10 @@ function computeDaySkyColors(day) {
       mieIntensity:   day.mieIntensity     ?? 0.5,
       rayleighSpread: day.rayleighSpread   ?? 0.5,
       humidity:       day._humidityRaw     ?? 50,
-      angstromExp:    0,
+      angstromExp:    day.angstromExp      ?? 0,
       ozoneDU:        day.ozoneDU          ?? 300,
+      clouds:         cloudFractionsFor(day),
+      mieGrowth:      day.mieGrowthFactor  ?? 1,
     });
   } catch {
     day.skyColors = null;

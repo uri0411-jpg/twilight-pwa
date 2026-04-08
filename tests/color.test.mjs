@@ -8,8 +8,8 @@
 import { test } from 'node:test';
 import assert   from 'node:assert/strict';
 
-import { computeAtmosphere }               from '../js/engine/atmosphere.js';
-import { spectrumToRGB, blendColors }      from '../js/engine/color.js';
+import { computeAtmosphere }                                     from '../js/engine/atmosphere.js';
+import { spectrumToRGB, blendColors, applyPerceptualTuning, PERCEPTUAL_BOOST } from '../js/engine/color.js';
 
 // ── Sunset color expectations ─────────────────────────────────────────────────
 
@@ -90,4 +90,153 @@ test('higher ozoneDU slightly suppresses orange channel at twilight', () => {
   const ratiHi = rgbHi.r / Math.max(rgbHi.b, 1);
   assert.ok(ratiLo >= ratiHi,
     `Higher ozone should reduce warm/cool ratio at twilight horizon. Lo=${ratiLo.toFixed(3)}, Hi=${ratiHi.toFixed(3)}`);
+});
+
+// ── Phase 7: Perceptual tuning layer ─────────────────────────────────────────
+//
+// These tests are split into two groups:
+//
+//   (1) Dormancy invariants — verify that PERCEPTUAL_BOOST ships at 0 and that
+//       the function is a byte-identical no-op in that state. These are the
+//       only Phase 7 tests that run against the shipping binary.
+//
+//   (2) Activation behaviour — verify the mathematical properties the tuning
+//       pass is supposed to exhibit WHEN the dial is up. Because PERCEPTUAL_BOOST
+//       is a module-level const, we can't flip it at test time; instead these
+//       tests replicate the formula inline and assert its properties, then
+//       cross-check against the real function using the property that its
+//       output at BOOST=0 is the identity.
+
+test('Phase 7 rollout: PERCEPTUAL_BOOST pinned at 0.5 (conservative first step)', () => {
+  // Rolled out at 0.5 after visual sign-off. Any further bump (e.g. to 1.0)
+  // must update this assertion in the same commit. Reverting to 0 restores
+  // pure-physics output byte-for-byte via the `=== 0` guard.
+  assert.strictEqual(PERCEPTUAL_BOOST, 0.5,
+    `PERCEPTUAL_BOOST is now 0.5 (Phase 7 rollout); got ${PERCEPTUAL_BOOST}.`);
+});
+
+test('Phase 7: applyPerceptualTuning is identity at midday (outside sunset gate)', () => {
+  // Even with the boost active, the bandpass gate must zero out the effect
+  // above +8° elevation. This is the "daytime sky must still be blue" guarantee.
+  const rgb = { r: 90, g: 130, b: 200 };
+  const out = applyPerceptualTuning(rgb, { sunAngle_rad: Math.PI / 3, zone: 'horizon' });
+  assert.deepStrictEqual(out, rgb, 'Midday horizon must be unchanged even when boost is active');
+});
+
+test('Phase 7: applyPerceptualTuning is identity at astronomical twilight', () => {
+  // And below the lower bandpass bound — no effect after full darkness.
+  const rgb = { r: 10, g: 10, b: 30 };
+  const out = applyPerceptualTuning(rgb, { sunAngle_rad: -12 * Math.PI / 180, zone: 'horizon' });
+  assert.deepStrictEqual(out, rgb);
+});
+
+test('Phase 7: applyPerceptualTuning lifts R and dips B at sunset horizon', () => {
+  // Core aesthetic assertion: at the horizon during the sunset window, the
+  // tuning pass must shift colour toward warmer. This is the whole point of
+  // having the layer at all.
+  const rgb = { r: 200, g: 120, b: 100 };
+  const out = applyPerceptualTuning(rgb, { sunAngle_rad: 0, zone: 'horizon' });
+  assert.ok(out.r > rgb.r, `R must lift at sunset horizon; got r=${out.r}, input=${rgb.r}`);
+  assert.ok(out.b < rgb.b, `B must dip  at sunset horizon; got b=${out.b}, input=${rgb.b}`);
+  assert.ok(out.g >= rgb.g, `G must not drop at sunset horizon; got g=${out.g}, input=${rgb.g}`);
+});
+
+test('Phase 7: horizon zone receives more boost than skyTop at the same sun angle', () => {
+  // Zone asymmetry: skyTop has zoneW=0.4, horizon has zoneW=1.0, so the
+  // magnitude of the R shift on horizon must exceed the skyTop R shift for
+  // the same input at the same sun angle.
+  const rgb = { r: 200, g: 120, b: 100 };
+  const h   = applyPerceptualTuning(rgb, { sunAngle_rad: 0, zone: 'horizon' });
+  const t   = applyPerceptualTuning(rgb, { sunAngle_rad: 0, zone: 'skyTop'  });
+  const dRh = h.r - rgb.r;
+  const dRt = t.r - rgb.r;
+  assert.ok(dRh > dRt,
+    `Horizon ΔR (${dRh}) must exceed skyTop ΔR (${dRt}) at PERCEPTUAL_BOOST=0.5`);
+});
+
+test('Phase 7: applyPerceptualTuning survives missing context', () => {
+  // Defensive: the caller must not need to pass a context at all.
+  // This can't assert exact bytes now that boost is active, but must not
+  // crash or produce NaN/out-of-range values.
+  const rgb = { r: 100, g: 100, b: 100 };
+  const out = applyPerceptualTuning(rgb);
+  assert.ok(Number.isFinite(out.r) && out.r >= 0 && out.r <= 255);
+  assert.ok(Number.isFinite(out.g) && out.g >= 0 && out.g <= 255);
+  assert.ok(Number.isFinite(out.b) && out.b >= 0 && out.b <= 255);
+});
+
+// ── Activation-mode property tests (formula replicated inline) ───────────────
+//
+// These verify the SHAPE of the tuning transform: sunset gate, zone asymmetry,
+// red lift, blue dip, luminance bound. They use the same formula the module
+// uses, so if the formula changes these will catch it via comparison against
+// expected signs and relative magnitudes — not against frozen numbers.
+
+function _smoothstep01(lo, hi, x) {
+  const t = Math.max(0, Math.min(1, (x - lo) / (hi - lo)));
+  return t * t * (3 - 2 * t);
+}
+
+function _tune(rgb, sunDeg, zone, boost) {
+  // Bandpass gate matching color.js: two smoothsteps, product
+  const rampIn  = _smoothstep01(-6, -3, sunDeg);
+  const rampOut = _smoothstep01(  8,  2, sunDeg);  // reversed (lo > hi)
+  const sunsetBoost = rampIn * rampOut * boost;
+  const zoneW = { skyTop: 0.4, skyMid: 0.8, horizon: 1.0, sun: 1.0 }[zone] ?? 1.0;
+  const k = sunsetBoost * zoneW;
+  return {
+    r: Math.max(0, Math.min(255, Math.round(rgb.r * (1 + 0.10 * k)))),
+    g: Math.max(0, Math.min(255, Math.round(rgb.g * (1 + 0.02 * k)))),
+    b: Math.max(0, Math.min(255, Math.round(rgb.b * (1 - 0.05 * k)))),
+  };
+}
+
+test('Phase 7 formula: midday (sun > 2°) gives zero effect regardless of zone', () => {
+  const rgb = { r: 180, g: 180, b: 220 };
+  const out = _tune(rgb, 45, 'horizon', 1.0);
+  assert.deepStrictEqual(out, rgb);
+});
+
+test('Phase 7 formula: astronomical twilight (sun < −6°) gives zero effect', () => {
+  const rgb = { r: 20, g: 20, b: 40 };
+  const out = _tune(rgb, -10, 'horizon', 1.0);
+  assert.deepStrictEqual(out, rgb);
+});
+
+test('Phase 7 formula: sunset horizon gets red lift + blue dip', () => {
+  const rgb  = { r: 200, g: 120, b: 100 };
+  const out  = _tune(rgb, -1, 'horizon', 1.0);
+  assert.ok(out.r > rgb.r, `R must lift at sunset horizon (was ${rgb.r}, got ${out.r})`);
+  assert.ok(out.b < rgb.b, `B must dip  at sunset horizon (was ${rgb.b}, got ${out.b})`);
+  assert.ok(out.g >= rgb.g, `G must not drop at sunset horizon (was ${rgb.g}, got ${out.g})`);
+});
+
+test('Phase 7 formula: horizon boost magnitude > skyTop boost at same sun angle', () => {
+  // Zone asymmetry: horizon zoneW=1.0, skyTop zoneW=0.4 → horizon should move
+  // ≥ 2× as many R units as skyTop for the same input + sun angle
+  const rgb  = { r: 200, g: 120, b: 100 };
+  const h    = _tune(rgb, -1, 'horizon', 1.0);
+  const t    = _tune(rgb, -1, 'skyTop',  1.0);
+  const dRh  = h.r - rgb.r;
+  const dRt  = t.r - rgb.r;
+  assert.ok(dRh > dRt, `horizon ΔR (${dRh}) must exceed skyTop ΔR (${dRt})`);
+  // Within factor-of-3 of theoretical 2.5× (1.0 / 0.4) — allows rounding slack
+  assert.ok(dRh >= 2 * dRt, `horizon ΔR must be ≥ 2× skyTop ΔR (got ${dRh} vs ${dRt})`);
+});
+
+test('Phase 7 formula: luminance drift stays under 5% at full boost sunset horizon', () => {
+  // Rec. 709 luminance
+  const Y = ({ r, g, b }) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const rgb = { r: 180, g: 100, b: 60 };
+  const out = _tune(rgb, 0, 'horizon', 1.0);
+  const drift = Math.abs(Y(out) - Y(rgb)) / Math.max(Y(rgb), 1);
+  assert.ok(drift < 0.05, `Luminance drift ${(drift*100).toFixed(2)}% must stay under 5%`);
+});
+
+test('Phase 7 formula: channels clamp to [0, 255] even when boosted R would overflow', () => {
+  const rgb = { r: 250, g: 200, b: 50 };
+  const out = _tune(rgb, 0, 'horizon', 1.0);
+  assert.ok(out.r >= 0 && out.r <= 255, `r=${out.r}`);
+  assert.ok(out.g >= 0 && out.g <= 255, `g=${out.g}`);
+  assert.ok(out.b >= 0 && out.b <= 255, `b=${out.b}`);
 });

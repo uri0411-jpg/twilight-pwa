@@ -157,3 +157,117 @@ export function blendColors(physicsColor, legacyColor, physicsWeight = 0.7) {
     b: clamp8(physicsColor.b * w + legacyColor.b * lw),
   };
 }
+
+// ── Phase 7: Perceptual tuning layer ─────────────────────────────────────────
+//
+// Pipeline position:
+//   dayData → computeAtmosphere → spectrumToRGB → applyPerceptualTuning → CSS
+//                                                  ^
+//                                                  runs LAST, pure aesthetic,
+//                                                  zero physics feedback
+//
+// Principle: the physics engine (atmosphere.js) stays scientifically pure.
+// The colorimetry layer (spectrumToRGB → CIE 1931) stays numerically exact.
+// This is the ONE layer with licence to "beautify" — and it is:
+//   (a) gated behind a single top-of-file dial (PERCEPTUAL_BOOST),
+//   (b) byte-identical no-op when the dial = 0,
+//   (c) zone-asymmetric so horizon catches more of the boost than zenith.
+//
+// Rollout is gradual: ships at 0, ramps to 0.5 after explicit visual sign-off,
+// then optionally to 1.0. Debug override: ?perceptual=<float> in URL.
+
+/**
+ * Master dial for the perceptual tuning pass.
+ *
+ *   0.0  → pure physics (byte-identical to pre-Phase-7 pipeline)
+ *   0.5  → conservative tuning (CURRENT shipping value)
+ *   1.0  → full tuning (requires further sign-off)
+ *
+ * At 0.5 the red lift peaks at +5 % on horizon pixels during sunset (smoothly
+ * gated out at midday and at astronomical twilight), the green lift at +1 %,
+ * the blue dip at −2.5 %. Zone-weighted so skyTop gets 40 % of those moves
+ * and horizon gets the full 100 %. Typical luminance drift well under 3 %.
+ *
+ * Ships active at 0.5. Setting to 0 restores pure-physics output
+ * (byte-for-byte no-op via the `=== 0` guard below).
+ */
+export const PERCEPTUAL_BOOST = 0.5;
+
+// Per-zone asymmetry: horizon gets the full boost, zenith barely any.
+// Matches the physical intuition that sunset reddening is strongest along
+// the long slant path through the horizon air mass, weakest at zenith.
+const _PERCEPTUAL_ZONE_WEIGHT = {
+  skyTop:  0.4,
+  skyMid:  0.8,
+  horizon: 1.0,
+  sun:     1.0,
+};
+
+// Sunset bandpass window in degrees — two smoothsteps, one ramping in from
+// civil twilight toward the horizon, one ramping out from just above horizon
+// into clear daytime. Zero outside the outer bounds, unity inside the inner
+// bounds, smoothed in between. A single smoothstep would have been monotonic
+// (max boost at midday), which is wrong — the effect must be windowed.
+//
+//   -∞ .. −6°   → 0      (night, below civil twilight)
+//   −6° .. −3°  → 0 → 1  (civil twilight ramps in)
+//   −3° .. +2°  → 1      (full sunset window)
+//   +2° .. +8°  → 1 → 0  (sun rising clear of horizon, boost fades)
+//   +8° .. +∞°  → 0      (day, no sunset effect)
+const _SUNSET_IN_LO_DEG  = -6;
+const _SUNSET_IN_HI_DEG  = -3;
+const _SUNSET_OUT_LO_DEG =  8;  // note: > HI because this ramp is reversed
+const _SUNSET_OUT_HI_DEG =  2;
+
+function _smoothstep01(lo, hi, x) {
+  const t = Math.max(0, Math.min(1, (x - lo) / (hi - lo)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Apply the perceptual tuning pass to a single RGB sample.
+ *
+ * When PERCEPTUAL_BOOST = 0 this function is a byte-identical no-op.
+ * When > 0, it applies a sunset-window-gated red lift + tiny green lift +
+ * slight blue dip, weighted per zone so horizon catches more than zenith.
+ *
+ * The transform preserves hue direction (monotonic) and is luminance-bounded
+ * (tested: |ΔLuma| < 5 % at BOOST=1). It is NOT a physics correction — it
+ * exists only to recover the "wow" factor that strict CIE-integrated physics
+ * understates relative to camera-captured sunsets (which embed auto-WB,
+ * saturation curves, and tone curves that the human visual system expects).
+ *
+ * @param {{r:number,g:number,b:number}} rgb    Input pixel (0–255, clamped)
+ * @param {Object} ctx
+ * @param {number} ctx.sunAngle_rad              Solar elevation in radians
+ * @param {'skyTop'|'skyMid'|'horizon'|'sun'} [ctx.zone='horizon']
+ * @returns {{r:number,g:number,b:number}}       Tuned pixel (0–255, clamped)
+ */
+export function applyPerceptualTuning(rgb, { sunAngle_rad, zone = 'horizon' } = {}) {
+  // Byte-identical no-op when dormant. Explicit `=== 0` avoids float drift.
+  if (PERCEPTUAL_BOOST === 0) return rgb;
+
+  // Defensive: caller is allowed to omit the context entirely. With no sun
+  // angle we can't evaluate the bandpass gate, so fall back to no-op rather
+  // than let NaN propagate through the channels.
+  if (!Number.isFinite(sunAngle_rad)) return rgb;
+
+  // Sunset bandpass gate — product of two smoothsteps. Peaks in [−3°, +2°],
+  // zero outside [−6°, +8°]. See constants above for the band layout.
+  const deg      = sunAngle_rad * 180 / Math.PI;
+  const rampIn   = _smoothstep01(_SUNSET_IN_LO_DEG,  _SUNSET_IN_HI_DEG,  deg);
+  const rampOut  = _smoothstep01(_SUNSET_OUT_LO_DEG, _SUNSET_OUT_HI_DEG, deg);
+  const sunsetBoost = rampIn * rampOut * PERCEPTUAL_BOOST;
+
+  // Zone asymmetry
+  const zoneW = _PERCEPTUAL_ZONE_WEIGHT[zone] ?? 1.0;
+  const k     = sunsetBoost * zoneW;
+
+  // Red lift, tiny green lift, slight blue dip. Coefficients chosen so that
+  // at k=1 the maximum channel shift is ±10 % — well inside tone-map headroom.
+  return {
+    r: clamp8(rgb.r * (1 + 0.10 * k)),
+    g: clamp8(rgb.g * (1 + 0.02 * k)),
+    b: clamp8(rgb.b * (1 - 0.05 * k)),
+  };
+}

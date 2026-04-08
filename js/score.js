@@ -726,13 +726,21 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     declination:         getSolarDeclination(date),
   });
 
-  // Ångström exponent from PM2.5 / (PM10 + dust) ratio:
-  //   high ratio (≈1) → fine smoke/urban particles → blue-tinted haze
-  //   low  ratio (≈0) → coarse dust / sea salt     → white/grey haze
+  // Ångström exponent — blend of two physical signals (Phase 2):
+  //   α_PM:         PM2.5 / (PM10 + dust) ratio → aerosol size distribution
+  //                 high ratio (≈1) → fine smoke/urban → blue-tinted haze
+  //                 low  ratio (≈0) → coarse dust/salt → white/grey haze
+  //   α_humidity:   κ-Köhler hygroscopic growth shifts particle size
+  //                 distribution toward maritime/wet values as RH rises.
+  //
+  // 50/50 soft blend avoids a hard swap when humidity changes while still
+  // letting wet air pull the exponent toward maritime α≈0.3.
   const _p25 = Number(ssParams.pm2_5) || 0;
   const _p10 = Number(ssParams.pm10)  || 0;
   const _d   = Number(ssParams.dust)  || 0;
-  const angstromExp = (_p10 + _d + 1) > 2 ? _p25 / (_p10 + _d + 1) : 0.5;
+  const _alphaPM       = (_p10 + _d + 1) > 2 ? _p25 / (_p10 + _d + 1) : 0.5;
+  const _alphaHumidity = physics.angstromEffective ?? 0;
+  const angstromExp = 0.5 * _alphaPM + 0.5 * _alphaHumidity;
 
   // Seasonal ozone: varies by latitude band and month (~±50 DU over the year).
   // Stored on dayData so the render layer (main-screen.js) can use it for live
@@ -863,6 +871,9 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     mieIntensity:   physics.mieIntensity,
     rayleighSpread: physics.rayleighSpread,
     physicsContributions: physics.contributions,
+    // Phase 2: humidity → Mie physical drivers (κ-Köhler growth + α blend)
+    mieGrowthFactor: physics.mieGrowthFactor ?? 1,
+    angstromExp,                     // blended α_PM × α_humidity for render layer
     ozoneDU:        seasonalOzone,  // seasonal ozone column (DU) for render layer
     // Pulse 2: golden window — physics-aware peak time prediction
     goldenWindow,
