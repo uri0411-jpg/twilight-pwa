@@ -8,7 +8,7 @@ import { getGPS, saveLocation, loadLocation }  from './location.js';
 import { fetchWeek, fetchCityName, fetchAirQuality, fetchWesternHorizon, fetchSpots } from './api.js';
 import { calcWeekData }                        from './score.js';
 import { initMainScreen, showMainSkeleton, repaintScoreColors } from './main-screen.js';
-import { initSpotsScreen, calcNearbyAvgScore, preloadSpotsData, invalidatePreloadedSpots } from './spots-screen.js';
+import { initSpotsScreen, calcNearbyAvgScore, preloadSpotsData, invalidatePreloadedSpots, hasPreloadedSpots } from './spots-screen.js';
 import { initSettingsScreen }                  from './settings-screen.js';
 import { initLearningScreen }                  from './learning-screen.js';
 import { showToast, showLoading }              from './ui.js';
@@ -328,6 +328,18 @@ async function handleRefresh(e) {
 
 
 // ─────────────────────────────────────────
+//  Spots re-init — non-critical, best-effort
+//  Isolated so a Leaflet/DOM error never surfaces as a location failure
+// ─────────────────────────────────────────
+async function reinitSpotsSafe(weekData) {
+  try {
+    await initSpotsScreen(weekData);
+  } catch (err) {
+    console.error('[spots] re-init failed after location change:', err);
+  }
+}
+
+// ─────────────────────────────────────────
 //  Manual location handler
 //  Triggered by twilight:setLocation custom event
 // ─────────────────────────────────────────
@@ -360,17 +372,30 @@ async function handleSetLocation(e) {
     updateThemeColor(_weekData);
     showToast(`מיקום עודכן: ${_city}`, 'success');
 
-    invalidatePreloadedSpots();
-    preloadSpotsData(_weekData, _loc).catch(() => {});
-
-    // If spots screen is currently active, re-init it with fresh forecast
-    if (_spotsInitialized) {
-      await initSpotsScreen(_weekData);
-    }
+    // ── Critical path ends here ──────────────────────────────────────────────
+    // Everything below is a non-critical side-effect (spots UI sync).
+    // Failures must NOT propagate back into the catch block above.
+    const wasOnSpotsScreen = _spotsInitialized;
     _spotsInitialized = false;
+    invalidatePreloadedSpots();
+
+    if (wasOnSpotsScreen) {
+      // User is on spots screen — re-init directly; skip preload (avoids double-fetch)
+      reinitSpotsSafe(_weekData);
+    } else if (!hasPreloadedSpots()) {
+      // User is elsewhere — background preload for when they navigate to spots
+      preloadSpotsData(_weekData, _loc).catch(() => {});
+    }
   } catch (err) {
     console.error('[setLocation]', err);
-    showToast('עדכון מיקום נכשל', 'error');
+    const isNetwork = !navigator.onLine || err?.name === 'TypeError';
+    const isRateLimit = err?.message?.includes('429');
+    showToast(
+      isNetwork    ? 'אין חיבור לרשת' :
+      isRateLimit  ? 'השרת עמוס, נסה שוב' :
+                     'עדכון מיקום נכשל',
+      'error'
+    );
   } finally {
     showLoading(false);
     _isRefreshing = false;

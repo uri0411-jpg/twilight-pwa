@@ -329,6 +329,10 @@ export function invalidatePreloadedSpots() {
   _preloadedForWeekData = null;
 }
 
+export function hasPreloadedSpots() {
+  return _preloadedSpots !== null;
+}
+
 // ─── Best day label ──────────────────────
 function bestDayLabel(allScores) {
   if (!allScores || allScores.length < 2) return null;
