@@ -36,10 +36,10 @@ export function getGPS() {
               resolve({ lat: 32.0853, lon: 34.7818, isFallback: true });
             }
           },
-          { timeout: 5000, enableHighAccuracy: false }
+          { timeout: 10000, enableHighAccuracy: false }
         );
       },
-      { timeout: 4000, enableHighAccuracy: true }
+      { timeout: 12000, enableHighAccuracy: true }
     );
   });
 }

@@ -192,12 +192,23 @@ async function loadAppData(forceRefresh = false) {
     _loc  = saved;
     _city = saved.city || 'מיקומך';
   } else {
-    _loc  = await getGPS();
-    if (_loc.isFallback) {
+    // Non-blocking GPS: boot immediately with Tel Aviv placeholder (not saved),
+    // then refresh automatically when GPS resolves in the background.
+    _loc  = { lat: 32.0853, lon: 34.7818, isFallback: true };
+    _city = 'מאתר מיקום...';
+    getGPS().then(async pos => {
+      if (pos.isFallback) {
+        showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
+        return;
+      }
+      const city = await fetchCityName(pos.lat, pos.lon);
+      saveLocation(pos.lat, pos.lon, city);
+      window.dispatchEvent(new CustomEvent('twilight:setLocation', {
+        detail: { lat: pos.lat, lon: pos.lon, city }
+      }));
+    }).catch(() => {
       showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
-    }
-    _city = await fetchCityName(_loc.lat, _loc.lon);
-    saveLocation(_loc.lat, _loc.lon, _city);
+    });
   }
 
   // On stale reload, clear EMA pin so fresh scores aren't smoothed with old data
@@ -290,8 +301,13 @@ async function handleRefresh(e) {
     if (e?.detail?.gps) {
       const freshLoc = await getGPS();
       _loc  = freshLoc;
-      _city = await fetchCityName(freshLoc.lat, freshLoc.lon);
-      saveLocation(freshLoc.lat, freshLoc.lon, _city);
+      if (!freshLoc.isFallback) {
+        _city = await fetchCityName(freshLoc.lat, freshLoc.lon);
+        saveLocation(freshLoc.lat, freshLoc.lon, _city);
+      } else {
+        _city = 'תל אביב';
+        showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
+      }
     }
 
     // Clear the EMA score pin so a forced refresh always shows fresh scores
@@ -334,7 +350,13 @@ async function handleRefresh(e) {
 async function handleSetLocation(e) {
   const { lat, lon, city } = e.detail || {};
   if (!lat || !lon) return;
-  if (_isRefreshing) return;
+  if (_isRefreshing) {
+    // Don't silently drop — retry after current refresh completes
+    setTimeout(() =>
+      window.dispatchEvent(new CustomEvent('twilight:setLocation', { detail: e.detail }))
+    , 2000);
+    return;
+  }
   _isRefreshing = true;
   showLoading(true);
   try {
