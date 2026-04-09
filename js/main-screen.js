@@ -83,12 +83,14 @@ function _updateLiveScoreColors(skyColors, mainScore) {
     if (!isNaN(s)) el.style.color = scoreToSkyColor(s, skyColors, bgLuma);
   }
 
-  // 3. Daily card badges — text + border tint
+  // 3. Daily card badges — text + border tint (use per-day skyColors when available)
   for (const el of document.querySelectorAll('#screen-main .score-badge')) {
     const span = el.querySelector('span');
     const s = span ? parseFloat(span.textContent) : NaN;
     if (!isNaN(s)) {
-      const c = scoreToSkyColor(s, skyColors, bgLuma);
+      const dayIdx = parseInt(el.dataset.dayIdx, 10);
+      const daySkyColors = (!isNaN(dayIdx) && _weekData?.[dayIdx]?.skyColors) ? _weekData[dayIdx].skyColors : skyColors;
+      const c = scoreToSkyColor(s, daySkyColors, bgLuma);
       el.style.color = c;
       el.style.borderColor = c + '55';
     }
@@ -312,6 +314,16 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
 
   const container = document.getElementById('screen-main');
   if (!container) return;
+
+  // Prime _cardBgLuma before HTML build so scoreToSkyColor contrast checks use
+  // the real glass-card luminance on first render, not the 0.02 cold-start default.
+  const _initDay = weekData[0];
+  if (_initDay) {
+    updateDynamicGradient(
+      _initDay.score, _initDay.turbidity ?? 0.3, _initDay.palette?.style ?? '',
+      _initDay.skyColors, _initDay.goldenWindow?.beltOfVenus || 0
+    );
+  }
 
   container.innerHTML = buildMainHTML(loc, city, weekData);
   attachMainEvents();
@@ -909,7 +921,7 @@ function renderWeekBars(weekData) {
           <div style="position:absolute;top:0;left:0;width:20%;height:100%;background:linear-gradient(90deg,rgba(0,0,0,0.22) 0%,rgba(0,0,0,0) 100%)"></div>
           <div style="position:absolute;top:0;right:0;width:20%;height:100%;background:linear-gradient(270deg,rgba(0,0,0,0.22) 0%,rgba(0,0,0,0) 100%)"></div>
           <div style="position:absolute;top:0;left:10%;right:10%;height:45%;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.30) 0%,rgba(255,255,255,0) 100%)"></div>
-          <span class="week-bar-score" style="position:relative;z-index:1;color:${metal.text}">${ds.toFixed(1)}</span>
+          <span class="week-bar-score" style="position:relative;z-index:1;color:${scoreToSkyColor(ds, d.skyColors, getCardBgLuma())}">${ds.toFixed(1)}</span>
         </div>
       </div>
       <div class="week-bar-day">${label}</div>
@@ -981,7 +993,7 @@ function renderDailyCards(weekData) {
       <!-- HEADER -->
       <div class="daily-header" onclick="toggleDaily(${i})" style="cursor:pointer;padding:14px 16px">
         <div style="display:flex;align-items:center;gap:10px">
-          <div class="score-badge" style="background:${dsMetal.gradient};border:1px solid ${dsColor}55;color:${dsMetal.text};position:relative;overflow:hidden" ${ds >= 7 ? 'data-shimmer' : ''}><div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div><span style="position:relative;z-index:1;font-size:13px">${ds.toFixed(1)}</span></div>
+          <div class="score-badge" data-day-idx="${i}" style="background:${dsMetal.gradient};border:1px solid ${dsColor}55;color:${dsColor};position:relative;overflow:hidden" ${ds >= 7 ? 'data-shimmer' : ''}><div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div><span style="position:relative;z-index:1;font-size:13px">${ds.toFixed(1)}</span></div>
           <div>
             <div style="font-weight:700;font-size:15px;color:var(--cream)">${d.day} · ${d.shortDate}</div>
             <div style="font-size:11px;color:var(--cream-faint)">${d.cond}</div>
