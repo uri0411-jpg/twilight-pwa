@@ -148,6 +148,24 @@ function startLiveGradient(today, loc) {
     const skyT = Math.max(0, Math.min(1, (liveElevDeg + 6) / 12));
     document.documentElement.style.setProperty('--ui-sky-t', skyT.toFixed(3));
 
+    // Score-driven photo mood: saturate + brightness of the background photo
+    // reflects the day's forecast quality so the scene matches the prediction.
+    //   score 8–10 → full vivid photo (sat 1.0, bright 1.0)
+    //   score 5–7  → muted pastel  (sat 0.45, bright 0.82)
+    //   score 0–4  → near-grey     (sat 0.08, bright 0.62)
+    // Smooth lerp between tiers so there are no hard jumps.
+    const bgEl = document.querySelector('.bg-sunset');
+    if (bgEl) {
+      const s = displayScore / 10; // 0..1
+      const sat   = s >= 0.8 ? 1.0
+                  : s >= 0.5 ? 0.45 + (s - 0.5) / 0.3 * 0.55
+                  :            0.08 + (s / 0.5) * 0.37;
+      const brite = s >= 0.8 ? 1.0
+                  : s >= 0.5 ? 0.82 + (s - 0.5) / 0.3 * 0.18
+                  :            0.62 + (s / 0.5) * 0.20;
+      bgEl.style.filter = `saturate(${sat.toFixed(2)}) brightness(${brite.toFixed(2)})`;
+    }
+
     // Night vision: auto-engage when sun is below -2° and screen open > 2 min
     const nvActive = liveElevDeg < -2 && (Date.now() - _screenOpenTime) > 120_000;
     document.body.classList.toggle('night-vision', nvActive);
