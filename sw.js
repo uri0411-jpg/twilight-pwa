@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 // 🔴 BUMP THIS ON EVERY DEPLOY (twl-v3, twl-v4, ...)
-const CACHE_NAME  = 'twl-v37';  // bumped: physics-driven score colors — sky gradient sampling
+const CACHE_NAME  = 'twl-v38';  // bumped: CSS v23 — forces fresh sky canvas CSS on pull-to-refresh
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 250;         // ~6MB at ~25KB/tile — enough for region + new spot
 
