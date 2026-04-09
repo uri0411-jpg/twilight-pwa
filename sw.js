@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 // 🔴 BUMP THIS ON EVERY DEPLOY (twl-v3, twl-v4, ...)
-const CACHE_NAME  = 'twl-v38';  // bumped: CSS v23 — forces fresh sky canvas CSS on pull-to-refresh
+const CACHE_NAME  = 'twl-v40';  // bumped: cache-busting fetch + ignoreSearch + reload force-refresh
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 250;         // ~6MB at ~25KB/tile — enough for region + new spot
 
@@ -78,7 +78,12 @@ self.addEventListener('install', event => {
     caches.open(CACHE_NAME).then(cache => {
       console.log('[SW] Caching static assets');
       return Promise.allSettled(
-        STATIC_ASSETS.map(url => cache.add(url).catch(e => console.warn('[SW] Failed to cache:', url, e)))
+        STATIC_ASSETS.map(async url => {
+          try {
+            const res = await fetch(url, { cache: 'no-store', headers: { 'cache-control': 'no-cache' } });
+            if (res.ok) await cache.put(url, res);
+          } catch (e) { console.warn('[SW] Failed to cache:', url, e); }
+        })
       );
     }).then(() => self.skipWaiting())
   );
@@ -131,11 +136,11 @@ self.addEventListener('fetch', event => {
 });
 
 async function cacheFirst(request) {
-  const cached = await caches.match(request);
+  const cached = await caches.match(request, { ignoreSearch: true });
   if (cached) return cached;
 
   try {
-    const response = await fetch(request);
+    const response = await fetch(request, { cache: 'no-store', headers: { 'cache-control': 'no-cache' } });
     if (response && response.status === 200 && response.type !== 'opaque') {
       const cache = await caches.open(CACHE_NAME);
       cache.put(request, response.clone());
@@ -156,15 +161,16 @@ async function cacheFirst(request) {
 async function networkFirst(request) {
   // No artificial SW timeout — app's AbortController (25s in api.js) is the
   // single source of truth for request timeouts. Avoids racing two timeouts.
+  // cache: 'no-store' + no-cache header bypass HTTP cache so we always hit origin.
   try {
-    const response = await fetch(request);
+    const response = await fetch(request, { cache: 'no-store', headers: { 'cache-control': 'no-cache' } });
     if (response && response.status === 200) {
       const cache = await caches.open(CACHE_NAME);
       cache.put(request, response.clone());
     }
     return response;
   } catch {
-    const cached = await caches.match(request);
+    const cached = await caches.match(request, { ignoreSearch: true });
     return cached || new Response(JSON.stringify({ error: 'offline' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json' }

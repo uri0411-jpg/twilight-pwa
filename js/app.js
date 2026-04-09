@@ -83,6 +83,13 @@ let _isRefreshing        = false; // FIX: debounce guard for refresh
 //  Boot
 // ─────────────────────────────────────────
 async function boot() {
+  // Detect stale session: if page reloads >5 min after last boot, force-refresh
+  // weather data instead of serving from localStorage cache. Closes the gap
+  // between pull-to-refresh (plain reload) and button refresh (force=true).
+  const lastBoot = Number(sessionStorage.getItem('twl_boot_time')) || 0;
+  const _isStaleSession = Date.now() - lastBoot > 5 * 60 * 1000;
+  sessionStorage.setItem('twl_boot_time', String(Date.now()));
+
   registerSW();
   window.addEventListener('twilight:updateReady', () => {
     // Auto-reload when a new SW takes control. A brief banner shows
@@ -114,7 +121,7 @@ async function boot() {
   );
 
   try {
-    await Promise.race([loadAppData(), bootTimeout]);
+    await Promise.race([loadAppData(_isStaleSession), bootTimeout]);
   } catch (err) {
     console.error('[boot] Failed:', err);
     showToast('שגיאה בטעינת נתונים — לחץ לנסות שוב', 'error');
@@ -176,7 +183,7 @@ async function autoSeedIfNeeded() {
   }
 }
 
-async function loadAppData() {
+async function loadAppData(forceRefresh = false) {
   const saved = loadLocation();
   if (saved) {
     _loc  = saved;
@@ -190,6 +197,12 @@ async function loadAppData() {
     saveLocation(_loc.lat, _loc.lon, _city);
   }
 
+  // On stale reload, clear EMA pin so fresh scores aren't smoothed with old data
+  if (forceRefresh) {
+    const pinKey = `${_SCORE_PIN_KEY}_${_loc.lat.toFixed(2)}_${_loc.lon.toFixed(2)}`;
+    localStorage.removeItem(pinKey);
+  }
+
   await autoSeedIfNeeded();
 
   // Freeze learning adjustments for the session BEFORE the first calcWeekData.
@@ -200,9 +213,9 @@ async function loadAppData() {
   pinLearningSnapshot();
 
   const [weather, airQ, westData, nearbySpots] = await Promise.all([
-    fetchWeek(_loc.lat, _loc.lon),
-    fetchAirQuality(_loc.lat, _loc.lon).catch(() => null),
-    fetchWesternHorizon(_loc.lat, _loc.lon).catch(() => null),
+    fetchWeek(_loc.lat, _loc.lon, forceRefresh),
+    fetchAirQuality(_loc.lat, _loc.lon, forceRefresh).catch(() => null),
+    fetchWesternHorizon(_loc.lat, _loc.lon, forceRefresh).catch(() => null),
     fetchSpots(_loc.lat, _loc.lon, 10).catch(() => [])
   ]);
   _airQuality = airQ;
