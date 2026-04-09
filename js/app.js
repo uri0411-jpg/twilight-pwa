@@ -7,7 +7,7 @@ import { initNav, showScreen, onScreenChange } from './nav.js';
 import { getGPS, saveLocation, loadLocation }  from './location.js';
 import { fetchWeek, fetchCityName, fetchAirQuality, fetchWesternHorizon, fetchSpots } from './api.js';
 import { calcWeekData }                        from './score.js';
-import { initMainScreen, showMainSkeleton }    from './main-screen.js';
+import { initMainScreen, showMainSkeleton, repaintScoreColors } from './main-screen.js';
 import { initSpotsScreen, calcNearbyAvgScore, preloadSpotsData, invalidatePreloadedSpots } from './spots-screen.js';
 import { initSettingsScreen }                  from './settings-screen.js';
 import { initLearningScreen }                  from './learning-screen.js';
@@ -146,6 +146,7 @@ async function boot() {
     if (id === 'spots') {
       _spotsInitialized = true;
       await initSpotsScreen(_weekData);
+      repaintScoreColors(); // immediate live sky colors on spots screen
     }
     if (id === 'settings') {
       initSettingsScreen();

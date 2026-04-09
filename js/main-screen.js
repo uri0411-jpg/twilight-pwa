@@ -77,14 +77,14 @@ function _updateLiveScoreColors(skyColors, mainScore) {
     gaugeArc.style.filter = `drop-shadow(0 0 6px ${mainColor}66)`;
   }
 
-  // 2. Week bar scores, hourly scores, event scores
-  for (const el of document.querySelectorAll('#screen-main .week-bar-score, #screen-main .hourly-score, #screen-main .event-score-num')) {
+  // 2. Week bar scores, hourly scores, event scores — ALL screens
+  for (const el of document.querySelectorAll('.week-bar-score, .hourly-score, .event-score-num, .spot-week-bar-score, .spot-score-cell-main .spot-score-num')) {
     const s = parseFloat(el.textContent);
     if (!isNaN(s)) el.style.color = scoreToSkyColor(s, skyColors, bgLuma);
   }
 
-  // 3. Daily card badges — text + border tint
-  for (const el of document.querySelectorAll('#screen-main .score-badge')) {
+  // 3. Score badges — text + border tint — ALL screens (exclude location badges)
+  for (const el of document.querySelectorAll('.score-badge:not(.score-badge-location)')) {
     const span = el.querySelector('span');
     const s = span ? parseFloat(span.textContent) : NaN;
     if (!isNaN(s)) {
@@ -159,6 +159,10 @@ function startLiveGradient(today, loc) {
       liveSkyColors,
       today.goldenWindow?.beltOfVenus || 0
     );
+
+    // Persist live skyColors back to weekData so other screens (spots, etc.)
+    // pick up the real-time value on their next render.
+    if (liveSkyColors) today.skyColors = liveSkyColors;
 
     // Live-tint all score elements with physics sky colors
     _updateLiveScoreColors(liveSkyColors, displayScore);
@@ -292,6 +296,17 @@ function computeDaySkyColors(day) {
   } catch {
     day.skyColors = null;
   }
+}
+
+/**
+ * Force an immediate repaint of all score colors across all screens
+ * using the latest live skyColors. Call after rendering a new screen.
+ */
+export function repaintScoreColors() {
+  const skyColors = _weekData?.[0]?.skyColors;
+  if (!skyColors?.horizon) return;
+  const mainScore = _spotAvgScores?.[0] ?? _weekData?.[0]?.score ?? 5;
+  _updateLiveScoreColors(skyColors, mainScore);
 }
 
 export async function initMainScreen(loc, city, weekData, spotAvgScores = null) {
