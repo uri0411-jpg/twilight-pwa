@@ -154,12 +154,14 @@ function startLiveGradient(today, loc) {
     const nvIndicator = document.getElementById('nv-indicator');
     if (nvIndicator) nvIndicator.style.display = nvActive ? 'block' : 'none';
 
-    // Canvas + sun disk + crepuscular rays — update with live data
-    const homeContent = document.querySelector('.home-content');
-    if (homeContent) {
-      // Canvas sky gradient (smoother, 8-stop, above CSS background)
+    // Canvas + sun disk + crepuscular rays — rendered into #sky-layers so the
+    // canvas's `mix-blend-mode: soft-light` and the sun's `mix-blend-mode:
+    // screen` both blend against the root backdrop (.bg-sunset + the canvas
+    // that just painted), not against a nested stacking context.
+    const skyLayers = document.getElementById('sky-layers');
+    if (skyLayers) {
       renderSkyCanvas(
-        homeContent,
+        skyLayers,
         liveElevDeg * (Math.PI / 180),
         today.turbidity  ?? 0.3,
         today.angstromExp ?? 0,
@@ -167,20 +169,21 @@ function startLiveGradient(today, loc) {
         cloudFractionsFor(today),
         today.mieGrowthFactor ?? 1,
       );
-    }
-    if (homeContent && today._solarAzimuth != null) {
-      renderSunDisk(homeContent, {
-        solarElevation: liveElevDeg,
-        solarAzimuth:   today._solarAzimuth,
-        turbidity:      today.turbidity    ?? 0.3,
-        mieIntensity:   today.mieIntensity ?? 0.5,
-        humidity:       today._humidityRaw ?? 50,
-        airMass:        liveAirmass,
-      });
 
-      const crepProb = today.scoreEngine?.crepuscularRays ?? 0;
-      renderCrepuscularRays(homeContent, crepProb, today._solarAzimuth,
-        /* sunY approx from elevation */ 65 - liveElevDeg * 1.8);
+      if (today._solarAzimuth != null) {
+        renderSunDisk(skyLayers, {
+          solarElevation: liveElevDeg,
+          solarAzimuth:   today._solarAzimuth,
+          turbidity:      today.turbidity    ?? 0.3,
+          mieIntensity:   today.mieIntensity ?? 0.5,
+          humidity:       today._humidityRaw ?? 50,
+          airMass:        liveAirmass,
+        });
+
+        const crepProb = today.scoreEngine?.crepuscularRays ?? 0;
+        renderCrepuscularRays(skyLayers, crepProb, today._solarAzimuth,
+          /* sunY approx from elevation */ 65 - liveElevDeg * 1.8);
+      }
     }
   }
 
@@ -188,10 +191,10 @@ function startLiveGradient(today, loc) {
   const id = setInterval(update, 30_000);
   return () => {
     clearInterval(id);
-    const hc = document.querySelector('.home-content');
-    removeSkyCanvas(hc);
-    removeSunDisk(hc);
-    removeCrepuscularRays(hc);
+    const skyLayers = document.getElementById('sky-layers');
+    removeSkyCanvas(skyLayers);
+    removeSunDisk(skyLayers);
+    removeCrepuscularRays(skyLayers);
   };
 }
 

@@ -1,14 +1,33 @@
 /**
  * skyCanvas.js — Physics-based canvas sky gradient renderer
  *
- * Replaces the CSS 5-stop gradient with a smooth canvas gradient computed
- * at 8 effective solar elevation samples, eliminating CSS gradient banding
- * and providing a physically motivated colour distribution across sky zones.
+ * Computes a smooth 8-stop gradient from Rayleigh+Mie+Chappuis physics and
+ * paints it ONLY on the sky/cloud pixels of the background photo, leaving
+ * mountains, olive trees, and dark silhouettes completely untouched.
+ *
+ * Two-layer selectivity:
+ *   1. `destination-in` clip against a pre-computed luminance + y-position
+ *      mask of background.jpg (see skyMask.js). This is geometric and
+ *      photometric filtering: only pixels that the photo deems "sky" at
+ *      all receive any paint.
+ *   2. `mix-blend-mode: hue` on the canvas element. Unlike `color`
+ *      (which replaces H+S) or `soft-light` (which only modulates L),
+ *      `hue` blend substitutes ONLY the backdrop's hue angle, keeping
+ *      the photo's own saturation AND luminance intact. Result: the
+ *      photo's vivid cloud texture and vibrancy are fully preserved;
+ *      only the direction of its colour wheel rotates to match what
+ *      the physics says the sky should look like right now.
+ *
+ *      This choice matters because the physics colour pipeline yields
+ *      mostly desaturated colours (sat ≈ 0.1–0.2) at any given stop —
+ *      what it *meaningfully* carries across time-of-day is the HUE
+ *      angle (blue → cyan → gold → pink → violet), not saturation.
+ *      `hue` blend extracts exactly that signal and ignores the rest.
  *
  * Architecture:
- *   • Injects <canvas id="sky-canvas"> as first child of .home-content
- *   • z-index: -1 inside the stacking context — above CSS background, below
- *     flex content, sun disk, and SVG rays
+ *   • Injects <canvas id="sky-canvas"> into #sky-layers (sibling of .bg-sunset)
+ *     so the blend mode's backdrop IS the photo.
+ *   • z-index: 1, mix-blend-mode: hue — surgical hue-rotation of sky region only.
  *   • Re-renders on each live gradient update (called from startLiveGradient)
  *
  * The 8 stops are obtained by sampling computeAtmosphere() at the current solar
@@ -30,6 +49,7 @@
 import { computeAtmosphere }                  from '../engine/atmosphere.js';
 import { spectrumToRGB, applyPerceptualTuning } from '../engine/color.js';
 import { LOCATION_CLIMATE }                    from '../config.js';
+import { loadSkyMask, drawSkyMask, getSkyMaskSync } from './skyMask.js';
 
 const CANVAS_ID = 'sky-canvas';
 
@@ -47,8 +67,13 @@ const STOP_OFFSETS_RAD = [0.35, 0.15, 0.06, 0.02, -0.01, -0.04, -0.09, -0.18];
 // Which zone of atmosphere output each stop samples
 const STOP_ZONES = ['skyTop', 'skyTop', 'skyMid', 'skyMid', 'horizon', 'horizon', 'horizon', 'horizon'];
 
-// Alpha for each stop (top is lighter overlay, bottom is deep dark)
-const STOP_ALPHAS = [0.70, 0.68, 0.62, 0.58, 0.55, 0.60, 0.70, 0.97];
+// Alpha for each stop — calibrated for `mix-blend-mode: hue` + sky mask.
+// `hue` replaces only the hue angle, so alpha acts as a linear mix between
+// the photo's original hue and the physics-derived hue.  We use 1.0 almost
+// everywhere to get the full physics signal where the mask permits.  A
+// small softening at the very zenith prevents the rotation from feeling
+// abrupt on overcast/cloud-free days.
+const STOP_ALPHAS = [0.95, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00];
 
 // ── Belt of Venus colour (physics-based, Phase 3.4) ──────────────────────────
 
@@ -101,12 +126,70 @@ function rgba({ r, g, b }, a) {
   return `rgba(${r},${g},${b},${a.toFixed(2)})`;
 }
 
+/**
+ * Boost the saturation of an RGB colour while preserving its hue angle
+ * and perceptual lightness.
+ *
+ * `mix-blend-mode: hue` requires the source colour to have meaningful
+ * saturation — if saturation is near zero, most browsers treat the
+ * source as achromatic and leave the backdrop's hue untouched. The
+ * physics pipeline returns mostly pale colours (s ≈ 0.08–0.18) whose
+ * HUE ANGLE encodes the time-of-day signal (violet → pink → gold), but
+ * whose low saturation is too weak for the blend to pick up.
+ *
+ * This helper converts RGB → HSL, clamps saturation up to at least
+ * `targetS`, and converts back. It keeps L and H untouched, so the
+ * perceptual lightness of the physics is preserved for any later
+ * blend modes that do care about L (e.g., if we ever reintroduce a
+ * luminance pass). The only property it alters is S.
+ */
+function boostSaturation({ r, g, b }, targetS = 0.70) {
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const L = (max + min) / 2;
+
+  if (max === min) {
+    // True grey — no hue to preserve; return as-is so blend does nothing.
+    return { r, g, b };
+  }
+
+  const d = max - min;
+  const S = L > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+  let H;
+  if      (max === rn) H = (gn - bn) / d + (gn < bn ? 6 : 0);
+  else if (max === gn) H = (bn - rn) / d + 2;
+  else                 H = (rn - gn) / d + 4;
+  H /= 6;
+
+  const newS = Math.max(S, targetS);
+
+  // HSL → RGB
+  const q = L < 0.5 ? L * (1 + newS) : L + newS - L * newS;
+  const p = 2 * L - q;
+  const hue2rgb = (t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+
+  return {
+    r: Math.round(hue2rgb(H + 1 / 3) * 255),
+    g: Math.round(hue2rgb(H)         * 255),
+    b: Math.round(hue2rgb(H - 1 / 3) * 255),
+  };
+}
+
 // ── Primary export ────────────────────────────────────────────────────────────
 
 /**
  * Render (or update) the physics-based sky canvas inside a container.
  *
- * @param {Element} container       The .home-content element (position: relative)
+ * @param {Element} container       The #sky-layers root (sibling of .bg-sunset)
  * @param {number}  sunAngle_rad    Current solar elevation in radians
  * @param {number}  turbidity       0–1 aerosol loading
  * @param {number}  [angstromExp=0] Ångström exponent from PM2.5/PM10
@@ -120,6 +203,7 @@ function rgba({ r, g, b }, a) {
 export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp = 0, beltOfVenus = 0, clouds, mieGrowth = 1) {
   if (!container) return;
 
+  // #sky-layers is position:fixed inset:0, so its size matches the viewport.
   const w = container.offsetWidth  || window.innerWidth;
   const h = container.offsetHeight || window.innerHeight;
 
@@ -133,11 +217,17 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
       inset:         '0',
       width:         '100%',
       height:        '100%',
-      zIndex:        '-1',
+      zIndex:        '1',
+      mixBlendMode:  'hue',
       pointerEvents: 'none',
       display:       'block',
     });
     container.insertBefore(canvas, container.firstChild);
+
+    // Kick off async mask load on first canvas creation. It will self-
+    // cache; the next renderSkyCanvas call after it resolves will see
+    // getSkyMaskSync() return the mask and clip to it.
+    loadSkyMask().catch(err => console.warn('[skyCanvas] mask load failed', err));
   }
 
   // Resize if needed
@@ -177,14 +267,44 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
     return rgb;
   });
 
+  // ── Saturation boost ──────────────────────────────────────────────────────
+  // `mix-blend-mode: hue` needs saturated source colours to register —
+  // the physics returns pale pastels (s ≈ 0.08–0.18) whose HUE angle
+  // carries the time-of-day signal but whose low saturation is ignored
+  // by the blend. Boost every stop up to a target saturation.
+  //
+  // The boost is strongest during twilight and weakest at high sun:
+  // at noon the physics hue for the horizon zone still carries a warm
+  // tint (it's the part of the sky nearest the solar disk), but we
+  // don't want a dramatic sunset look at midday. Elevation ≥ 12° →
+  // target saturation 0.30 (subtle); elevation ≤ 2° → target 0.75
+  // (full dramatic); smooth ramp in between.
+  const elevDeg = sunAngle_rad * 180 / Math.PI;
+  const boostT  = Math.max(0, Math.min(1, (12 - elevDeg) / 10));
+  const targetS = 0.30 + 0.45 * boostT;  // 0.30 → 0.75
+  const saturated = colors.map(c => boostSaturation(c, targetS));
+
   // ── Build vertical gradient ───────────────────────────────────────────────
   const grad = ctx.createLinearGradient(0, 0, 0, h);
   STOP_POSITIONS.forEach((pos, i) => {
-    grad.addColorStop(pos, rgba(colors[i], STOP_ALPHAS[i]));
+    grad.addColorStop(pos, rgba(saturated[i], STOP_ALPHAS[i]));
   });
 
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
+
+  // ── Clip to sky mask ──────────────────────────────────────────────────────
+  // If the mask has loaded, cut the gradient down to only the sky pixels of
+  // background.jpg. destination-in keeps the gradient only where the mask
+  // alpha is non-zero, scaled with mask alpha.  Before the mask loads we
+  // leave the gradient un-clipped — a harmless first-frame flash while the
+  // image decodes, typically <50ms.
+  const mask = getSkyMaskSync();
+  if (mask) {
+    ctx.globalCompositeOperation = 'destination-in';
+    drawSkyMask(ctx, w, h);
+    ctx.globalCompositeOperation = 'source-over';
+  }
 }
 
 /**

@@ -28,9 +28,9 @@
 </head>
 <body>
 
-  <!-- Background + overlay (always visible) -->
+  <!-- Background + sky layers (always visible, root stacking context so mix-blend-mode can reach .bg-sunset) -->
   <div class="bg-sunset"></div>
-  <div class="overlay"></div>
+  <div id="sky-layers"></div>
 
   <!-- ═══ SCREENS ═══ -->
 

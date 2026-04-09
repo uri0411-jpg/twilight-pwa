@@ -56,19 +56,17 @@ body {
   transform: translateZ(0);
   will-change: transform;
 }
-.overlay {
+
+/* Root stacking context for sky rendering. The canvas (#sky-canvas) and the
+   sun/halo/rays elements that live inside use mix-blend-mode to modulate the
+   .bg-sunset photo directly — they MUST share its stacking context, so
+   #sky-layers sits at document root as a sibling of .bg-sunset (not nested
+   inside a screen container, which would create an isolation boundary).
+   Screens (z-index 10) still draw over this layer. */
+#sky-layers {
   position: fixed;
   inset: 0;
-  /* Subtle darkening layer between the background photo and the physics-driven
-     sky gradient above. Kept deliberately light so the photo stays visible —
-     the physics gradient in .home-content does most of the colour work. */
-  background: linear-gradient(
-    180deg,
-    rgba(20,8,0,0.12) 0%,
-    rgba(20,8,0,0.04) 30%,
-    rgba(20,8,0,0.08) 60%,
-    rgba(10,4,0,0.30) 100%
-  );
+  pointer-events: none;
   z-index: 1;
 }
 
@@ -353,22 +351,6 @@ body.has-install-banner .screen { padding-top: 56px; }
 /* ═══════════════════════════════════════════
    MAIN SCREEN
 ═══════════════════════════════════════════ */
-/* Register --dyn-bg-* as typed properties so CSS transitions can animate them.
-   Without @property, custom properties are opaque strings — not animatable. */
-@property --dyn-bg-top    { syntax: '<color>'; initial-value: rgba(30,8,0,0.35);    inherits: true; }
-@property --dyn-bg-mid    { syntax: '<color>'; initial-value: rgba(55,15,0,0.30);   inherits: true; }
-@property --dyn-bg-belt   { syntax: '<color>'; initial-value: rgba(40,10,30,0.00);  inherits: true; }
-@property --dyn-bg-earth  { syntax: '<color>'; initial-value: rgba(5,3,8,0.60);     inherits: true; }
-@property --dyn-bg-bottom { syntax: '<color>'; initial-value: rgba(10,4,0,0.97);    inherits: true; }
-
-/* Dynamic gradient CSS vars — set by renderSkyGradient() / updateDynamicGradient() */
-:root {
-  --dyn-bg-top:    rgba(30, 8, 0, 0.35);   /* zenith — Rayleigh blue/violet */
-  --dyn-bg-mid:    rgba(55, 15, 0, 0.30);  /* mid sky — warm transition */
-  --dyn-bg-belt:   rgba(40, 10, 30, 0.00); /* Belt of Venus arch — default transparent */
-  --dyn-bg-earth:  rgba(5, 3, 8, 0.60);    /* earth shadow near horizon */
-  --dyn-bg-bottom: rgba(10, 4, 0, 0.97);   /* ground level — deep dark */
-}
 
 .home-content {
   position: relative;
@@ -378,24 +360,9 @@ body.has-install-banner .screen { padding-top: 56px; }
   flex-direction: column;
   gap: 14px;
   min-height: 100%;
-  /* Physics-driven 5-stop sky gradient overlay on the background image.
-     oklch interpolation avoids sRGB Mach banding at amber→pink→purple transitions.
-     Stops: zenith → mid-sky → Belt-of-Venus arch → earth-shadow → ground. */
-  background: linear-gradient(
-    in oklch 180deg,
-    var(--dyn-bg-top)    0%,
-    var(--dyn-bg-mid)    25%,
-    var(--dyn-bg-belt)   55%,
-    var(--dyn-bg-earth)  80%,
-    var(--dyn-bg-bottom) 100%
-  );
-  /* Smooth sky evolution between 30-second gradient ticks (requires @property above) */
-  transition:
-    --dyn-bg-top    8s ease-in-out,
-    --dyn-bg-mid    8s ease-in-out,
-    --dyn-bg-belt   8s ease-in-out,
-    --dyn-bg-earth  8s ease-in-out,
-    --dyn-bg-bottom 8s ease-in-out;
+  /* No background — the sky is painted onto .bg-sunset by skyCanvas.js via
+     mix-blend-mode. .home-content stays fully transparent so the composite
+     background shows through; glass cards still float above via z-index. */
 }
 
 /* ─── Palette Strip (Pulse 3 — informational, replaces decision banner) ─── */
