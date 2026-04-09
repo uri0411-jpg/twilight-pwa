@@ -1229,6 +1229,7 @@ async function doSearch() {
       const lat = parseFloat(data[0].lat), lon = parseFloat(data[0].lon);
       const name = data[0].display_name?.split(',')[0] || locationQuery;
       _loc = { lat, lon, city: name };
+      saveLocation(lat, lon, name);
       if (detectedType) {
         _filterType = detectedType;
         document.querySelectorAll('.spot-filter-pill').forEach(b => b.classList.toggle('active', b.dataset.filter === detectedType));
@@ -1238,8 +1239,10 @@ async function doSearch() {
         L.marker([lat, lon], { icon: L.divIcon({ html: '<div style="width:14px;height:14px;background:#F0B84A;border:2px solid #fff;border-radius:50%;box-shadow:0 0 8px rgba(240,184,74,0.8)"></div>', iconSize: [14,14], iconAnchor: [7,7], className: '' }) }).addTo(_map).bindPopup(esc(name));
       }
       saveRecent(q);
-      showToast(`מחפש ב: ${name}`, 'info');
-      await loadSpots();
+      showToast(`מעדכן תחזית ל: ${name}`, 'info');
+      window.dispatchEvent(new CustomEvent('twilight:setLocation', {
+        detail: { lat, lon, city: name }
+      }));
       renderRecentSearches();
     } else { showToast('לא נמצא מיקום', 'error'); }
   } catch { showToast('שגיאה בחיפוש', 'error'); }
@@ -1256,9 +1259,11 @@ function attachSpotsEvents() {
       const pos = await getGPS(); _loc = pos;
       const city = await fetchCityName(pos.lat, pos.lon);
       saveLocation(pos.lat, pos.lon, city);
-      showToast(`מיקום עודכן: ${city}`, 'success');
+      showToast(`מעדכן תחזית ל: ${city}`, 'info');
       if (_map) _map.setView([pos.lat, pos.lon], 11);
-      await loadSpots();
+      window.dispatchEvent(new CustomEvent('twilight:setLocation', {
+        detail: { lat: pos.lat, lon: pos.lon, city }
+      }));
     } catch { showToast('לא ניתן לאתר מיקום', 'error'); }
   });
 

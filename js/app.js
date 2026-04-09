@@ -18,6 +18,7 @@ import { recordPrediction, fetchActualForDate, getUnfilledDates, processLearning
 import { seedFromBacktest, getLearningStats, pinLearningSnapshot }  from './engine/learningEngine.js';
 import { initInstallPrompt }                   from './install-prompt.js';
 import { rearmSavedAlerts }                    from './notifications.js';
+import { initOnboarding }                      from './onboarding.js';
 import { scoreToLabel } from './utils.js';
 
 // ─────────────────────────────────────────
@@ -110,6 +111,7 @@ async function boot() {
   rearmSavedAlerts();
   initNav();
   initInstallPrompt();
+  initOnboarding();
 
   showMainSkeleton();
   showLoading(true);
@@ -358,9 +360,14 @@ async function handleSetLocation(e) {
     updateThemeColor(_weekData);
     showToast(`מיקום עודכן: ${_city}`, 'success');
 
-    _spotsInitialized = false;
     invalidatePreloadedSpots();
     preloadSpotsData(_weekData, _loc).catch(() => {});
+
+    // If spots screen is currently active, re-init it with fresh forecast
+    if (_spotsInitialized) {
+      await initSpotsScreen(_weekData);
+    }
+    _spotsInitialized = false;
   } catch (err) {
     console.error('[setLocation]', err);
     showToast('עדכון מיקום נכשל', 'error');

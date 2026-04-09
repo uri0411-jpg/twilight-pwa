@@ -114,4 +114,26 @@ function _srgbLum(c) { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c +
 let _cardBgLuma = 0.02;
 export function getCardBgLuma() { return _cardBgLuma; }
 
+// ─────────────────────────────────────────
+//  Display mode: basic / advanced
+// ─────────────────────────────────────────
+const DISPLAY_MODE_KEY = 'twl_display_mode';
+const ONBOARDING_KEY   = 'twl_onboarding_done';
+
+export function isAdvancedMode() {
+  return localStorage.getItem(DISPLAY_MODE_KEY) === 'advanced';
+}
+
+export function setDisplayMode(mode) {
+  localStorage.setItem(DISPLAY_MODE_KEY, mode);
+}
+
+export function isOnboardingDone() {
+  return localStorage.getItem(ONBOARDING_KEY) === '1';
+}
+
+export function markOnboardingDone() {
+  localStorage.setItem(ONBOARDING_KEY, '1');
+}
+
 // ✓ ui.js — complete

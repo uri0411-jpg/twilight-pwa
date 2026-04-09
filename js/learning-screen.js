@@ -2,21 +2,23 @@
 //  TWILIGHT — learning-screen.js
 //
 //  Dedicated full-screen view of the self-learning system.
-//  Replaces the cramped sections that used to live inside
-//  settings-screen.js (buildCalibrationSection / buildLearningSection).
+//  Two display modes:
+//    Basic    — human-readable summaries, explanations, chart legend
+//    Advanced — raw params, table filters, debug access
 //
 //  Layout:
 //    1. Header (back arrow + title)
-//    2. KPI strip            — דיוק / דגימות / מגמה / ביטחון
-//    3. Accuracy time chart  — full-width SVG, predicted vs actual
-//    4. Forecast bias panel  — 4 cards: clouds, humidity, dust, visibility
-//    5. Histogram            — recent vs older error distribution
-//    6. Learned parameters   — drama weights, bell peaks, model biases
-//    7. Entries table        — last 90 records, scrollable
-//    8. Reset button
+//    2. Natural language summary (basic)
+//    3. KPI strip            — דיוק / דגימות / מגמה / ביטחון + explanations
+//    4. Accuracy time chart  — full-width SVG + legend + tooltips
+//    5. Forecast bias panel  — 4 cards with plain-language explanations
+//    6. Histogram            — with summary sentence
+//    7. Learned parameters   — (advanced only) drama weights, bell peaks, model biases
+//    8. Entries table        — (advanced only) with filters
+//    9. Reset button
 // ═══════════════════════════════════════════
 
-import { showToast } from './ui.js';
+import { showToast, isAdvancedMode } from './ui.js';
 import { showScreen } from './nav.js';
 import { getLearningStats, clearLearningData } from './engine/learningEngine.js';
 import { getCalibrationStats } from './calibration.js';
@@ -32,7 +34,7 @@ export function initLearningScreen() {
   const cStats = getCalibrationStats();
 
   container.innerHTML = buildShell(lStats, cStats);
-  attachEvents();
+  attachEvents(lStats);
 }
 
 // ─────────────────────────────────────────────
@@ -40,6 +42,7 @@ export function initLearningScreen() {
 // ─────────────────────────────────────────────
 function buildShell(lStats, cStats) {
   const empty = lStats.sampleSize === 0;
+  const adv = isAdvancedMode();
 
   if (empty) {
     return `
@@ -56,12 +59,13 @@ function buildShell(lStats, cStats) {
   return `
   <div class="learning-content">
     ${renderHeader()}
+    ${renderNaturalSummary(lStats)}
     ${renderKPIs(lStats)}
     ${renderAccuracyChart(lStats)}
     ${renderBiasPanel(lStats)}
     ${renderHistogram(lStats)}
-    ${renderParamsPanel(lStats)}
-    ${renderEntriesTable(lStats)}
+    ${adv ? renderParamsPanel(lStats) : ''}
+    ${adv ? renderEntriesTable(lStats) : ''}
     ${renderResetBtn()}
   </div>`;
 }
@@ -83,7 +87,37 @@ function renderHeader() {
 }
 
 // ─────────────────────────────────────────────
-//  1. KPI strip
+//  Natural language summary (#2)
+// ─────────────────────────────────────────────
+function renderNaturalSummary(stats) {
+  const n   = stats.sampleSize;
+  const acc = stats.forecastAccuracy;
+  const tr  = stats.trend;
+
+  // Build a human sentence
+  const parts = [];
+  if (n < 15)       parts.push(`המערכת למדה רק מ-${n} שקיעות — עדיין מוקדם להסיק מסקנות`);
+  else if (n < 40)  parts.push(`המערכת למדה מ-${n} שקיעות ועדיין מתכיילת`);
+  else              parts.push(`המערכת למדה מ-${n} שקיעות`);
+
+  if (acc != null) {
+    if (acc >= 85)      parts.push(`הדיוק מצוין (${acc}%)`);
+    else if (acc >= 70) parts.push(`הדיוק סביר (${acc}%)`);
+    else                parts.push(`הדיוק עדיין נמוך (${acc}%) — צפוי להשתפר עם הזמן`);
+  }
+
+  if (tr === 'improving')     parts.push('ויש מגמת שיפור');
+  else if (tr === 'worsening') parts.push('אבל יש מגמת ירידה');
+  else if (n >= 20)            parts.push('והדיוק יציב');
+
+  return `
+  <div class="glass learning-summary">
+    <div class="learning-summary-text">${parts.join(', ')}.</div>
+  </div>`;
+}
+
+// ─────────────────────────────────────────────
+//  1. KPI strip — with sub-explanations
 // ─────────────────────────────────────────────
 function renderKPIs(stats) {
   const acc       = stats.forecastAccuracy;
@@ -99,29 +133,51 @@ function renderKPIs(stats) {
                    : stats.trend === 'worsening' ? '#ffaaaa'
                    :                                'var(--cream-faint)';
 
+  // Explanation strings for basic mode
+  const accExplain = acc == null ? 'לא מספיק נתונים'
+                   : acc >= 85  ? 'הניבויים קולעים ברוב המקרים'
+                   : acc >= 70  ? 'דיוק סביר, המערכת ממשיכה ללמוד'
+                   :              'המערכת עדיין לומדת את התנאים המקומיים';
+
+  const sampleExplain = stats.sampleSize < 20  ? 'צריך לפחות 20 שקיעות לדיוק טוב'
+                       : stats.sampleSize < 50 ? 'מצטבר מאגר נתונים'
+                       :                          'מאגר נתונים בוגר';
+
+  const trendExplain = stats.trend === 'improving' ? 'הדיוק משתפר'
+                     : stats.trend === 'worsening' ? 'יש ירידה בדיוק לאחרונה'
+                     :                                'הדיוק יציב';
+
+  const confExplain = stats.confidence >= 80 ? 'המערכת בטוחה בניבויים שלה'
+                    : stats.confidence >= 50 ? 'ביטחון בינוני — עוד מתכיילת'
+                    :                           'ביטחון נמוך — צריך עוד נתונים';
+
   return `
   <div class="learning-kpi-grid">
     <div class="glass learning-kpi">
       <div class="kpi-value" style="color:${accColor}">${acc != null ? acc + '%' : '—'}</div>
       <div class="kpi-label">דיוק תחזית</div>
+      <div class="kpi-explain">${accExplain}</div>
     </div>
     <div class="glass learning-kpi">
       <div class="kpi-value" style="color:var(--cream)">${stats.sampleSize}</div>
       <div class="kpi-label">דגימות</div>
+      <div class="kpi-explain">${sampleExplain}</div>
     </div>
     <div class="glass learning-kpi">
       <div class="kpi-value" style="color:${trendColor}">${trendIcon}</div>
       <div class="kpi-label">מגמה</div>
+      <div class="kpi-explain">${trendExplain}</div>
     </div>
     <div class="glass learning-kpi">
       <div class="kpi-value" style="color:var(--gold)">${stats.confidence}%</div>
       <div class="kpi-label">ביטחון</div>
+      <div class="kpi-explain">${confExplain}</div>
     </div>
   </div>`;
 }
 
 // ─────────────────────────────────────────────
-//  2. Accuracy time chart — full-width SVG
+//  2. Accuracy time chart — full-width SVG + tooltips
 // ─────────────────────────────────────────────
 function renderAccuracyChart(stats) {
   const ts = stats.timeSeries;
@@ -139,7 +195,6 @@ function renderAccuracyChart(stats) {
   const n = ts.length;
   const xStep = n > 1 ? innerW / (n - 1) : 0;
 
-  // y maps score 1..10 → top..bottom (1 at bottom, 10 at top)
   const yScale = (v) => v == null ? null : padY + ((10 - v) / 9) * innerH;
 
   const buildPolyline = (key) => {
@@ -160,6 +215,19 @@ function renderAccuracyChart(stats) {
     return `<circle cx="${cx}" cy="${cy}" r="3" fill="#b39ddb"/>`;
   }).join('');
 
+  // Invisible hit areas for tooltip tap targets
+  const hitAreas = ts.map((e, i) => {
+    const cx = (padX + i * xStep).toFixed(1);
+    const pred = e.predicted != null ? e.predicted.toFixed(1) : '—';
+    const recon = e.reconstructed != null ? e.reconstructed.toFixed(1) : '—';
+    const err = (e.predicted != null && e.reconstructed != null)
+      ? (e.predicted - e.reconstructed).toFixed(1) : '—';
+    const dateStr = e.date ? e.date.slice(5) : '';
+    return `<rect x="${(cx - 10).toFixed ? (parseFloat(cx) - 10).toFixed(1) : 0}" y="0" width="20" height="${H}"
+              fill="transparent" class="chart-hit"
+              data-date="${dateStr}" data-pred="${pred}" data-recon="${recon}" data-err="${err}"/>`;
+  }).join('');
+
   // y-axis grid lines (3, 5, 7, 9)
   const grid = [3, 5, 7, 9].map(v => {
     const y = yScale(v).toFixed(1);
@@ -170,27 +238,30 @@ function renderAccuracyChart(stats) {
   return `
   <div class="settings-section-label">דיוק לאורך זמן (${n} דגימות אחרונות)</div>
   <div class="glass learning-chart-wrap">
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="learning-chart">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="learning-chart" id="learning-accuracy-chart">
       ${grid}
       ${predPts  ? `<polyline points="${predPts}"  fill="none" stroke="var(--gold)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"/>` : ''}
       ${reconPts ? `<polyline points="${reconPts}" fill="none" stroke="#7eefb2"     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>` : ''}
       ${ratingDots}
+      ${hitAreas}
     </svg>
+    <div id="chart-tooltip" class="chart-tooltip" style="display:none"></div>
     <div class="learning-legend">
-      <span><span class="legend-line" style="background:var(--gold)"></span>תחזית</span>
+      <span><span class="legend-line" style="background:var(--gold)"></span>ניבוי</span>
       <span><span class="legend-line" style="background:#7eefb2"></span>בפועל</span>
-      <span><span class="legend-dot"  style="background:#b39ddb"></span>דירוג משתמש</span>
+      <span><span class="legend-dot"  style="background:#b39ddb"></span>דירוג שלך</span>
     </div>
+    <div class="chart-explain">לחץ על נקודה בגרף לפרטים</div>
   </div>`;
 }
 
 // ─────────────────────────────────────────────
-//  3. Forecast bias panel — 4 cards
+//  3. Forecast bias panel — 4 cards with explanations
 // ─────────────────────────────────────────────
 function renderBiasPanel(stats) {
   const { cloudBias, humidityBias, dustBias, visibilityBias } = stats.forecastBias;
 
-  const card = (label, val, hint) => {
+  const card = (label, val, paramHe) => {
     if (val == null) {
       return `
       <div class="glass bias-card">
@@ -200,38 +271,42 @@ function renderBiasPanel(stats) {
       </div>`;
     }
     const scale = 1 + val;
-    const arrow = scale > 1.05 ? '↑' : scale < 0.95 ? '↓' : '→';
+    const arrow = scale > 1.05 ? '↑' : scale < 0.95 ? '↓' : '✓';
     const color = (scale > 1.20 || scale < 0.80) ? '#ffaaaa'
                 : (scale > 1.10 || scale < 0.90) ? '#ffd580'
                 : '#aaffcc';
+
+    // Human explanation
+    let explain;
+    if (Math.abs(val) < 0.05) {
+      explain = `התחזית מדויקת לגבי ${paramHe}`;
+    } else if (val > 0) {
+      explain = `המערכת מזלזלת קצת ב${paramHe} — מתקנת כלפי מעלה`;
+    } else {
+      explain = `המערכת מגזימה קצת ב${paramHe} — מתקנת כלפי מטה`;
+    }
+
+    const adv = isAdvancedMode();
     return `
     <div class="glass bias-card">
       <div class="bias-label">${label}</div>
-      <div class="bias-value" style="color:${color}">${scale.toFixed(2)}× ${arrow}</div>
-      <div class="bias-hint">${hint}</div>
+      <div class="bias-value" style="color:${color}">${adv ? scale.toFixed(2) + '×' : ''} ${arrow}</div>
+      <div class="bias-hint">${explain}</div>
     </div>`;
-  };
-
-  const hintFor = (val, what) => {
-    if (val == null) return '';
-    if (Math.abs(val) < 0.05) return `התחזית מדויקת`;
-    return val > 0
-      ? `התחזית מאמדת חסר ${what}`
-      : `התחזית מאמדת יתר ${what}`;
   };
 
   return `
   <div class="settings-section-label">הטיית תחזית מול מציאות</div>
   <div class="learning-bias-grid">
-    ${card('ענן',    cloudBias,      hintFor(cloudBias, 'ענן'))}
-    ${card('לחות',  humidityBias,   hintFor(humidityBias, 'לחות'))}
-    ${card('אבק',   dustBias,       hintFor(dustBias, 'אבק'))}
-    ${card('נראות', visibilityBias, hintFor(visibilityBias, 'נראות'))}
+    ${card('ענן',    cloudBias,      'עננים')}
+    ${card('לחות',  humidityBias,   'לחות')}
+    ${card('אבק',   dustBias,       'אבק')}
+    ${card('נראות', visibilityBias, 'נראות')}
   </div>`;
 }
 
 // ─────────────────────────────────────────────
-//  4. Error histogram — recent vs older
+//  4. Error histogram — with summary
 // ─────────────────────────────────────────────
 function renderHistogram(stats) {
   const ts = stats.timeSeries;
@@ -242,7 +317,6 @@ function renderHistogram(stats) {
     .map(e => e.predicted - e.reconstructed);
   if (errors.length < 4) return '';
 
-  // Bins: -5..-3, -3..-1.5, -1.5..-0.5, -0.5..0.5, 0.5..1.5, 1.5..3, 3..5
   const bins = [
     { lo: -5,   hi: -3,   count: 0, label: '-3<' },
     { lo: -3,   hi: -1.5, count: 0, label: '-2'  },
@@ -268,27 +342,43 @@ function renderHistogram(stats) {
       </div>`;
   }).join('');
 
+  // Summary sentence
+  const centerBin = bins[3].count;
+  const total = errors.length;
+  const centerPct = Math.round(centerBin / total * 100);
+  const avgErr = (errors.reduce((s, e) => s + Math.abs(e), 0) / total).toFixed(1);
+
+  let summary;
+  if (centerPct >= 50) summary = `רוב הניבויים קולעים למטרה (${centerPct}% בטווח ±0.5)`;
+  else if (centerPct >= 30) summary = `חלק מהניבויים מדויקים, שגיאה ממוצעת: ${avgErr} נקודות`;
+  else summary = `שגיאה ממוצעת: ${avgErr} נקודות — המערכת עדיין מתכיילת`;
+
   return `
   <div class="settings-section-label">התפלגות שגיאת תחזית</div>
   <div class="glass learning-hist-wrap">
+    <div class="hist-explain">${summary}</div>
     <div class="learning-hist">${bars}</div>
-    <div class="hist-axis-label">שגיאה (תחזית − בפועל), נקודות</div>
+    <div class="hist-axis-label">שגיאה (ניבוי − בפועל), נקודות</div>
   </div>`;
 }
 
 // ─────────────────────────────────────────────
-//  5. Learned parameters
+//  5. Learned parameters (advanced only)
 // ─────────────────────────────────────────────
 function renderParamsPanel(stats) {
   const w  = stats.currentWeights;
   const mb = stats.modelBiases;
 
-  const param = (label, val, def, unit = '') => `
+  const param = (label, val, def, unit = '') => {
+    const diff = Math.abs(val - def);
+    const diffColor = diff < 0.02 ? '#aaffcc' : diff < 0.08 ? '#ffd580' : '#ffaaaa';
+    return `
     <div class="param-row">
       <span class="param-label">${label}</span>
-      <span class="param-value">${val}${unit}</span>
+      <span class="param-value" style="color:${diffColor}">${val}${unit}</span>
       <span class="param-default">ברירת מחדל ${def}${unit}</span>
     </div>`;
+  };
 
   return `
   <div class="settings-section-label">פרמטרים נלמדים</div>
@@ -310,14 +400,41 @@ function renderParamsPanel(stats) {
 }
 
 // ─────────────────────────────────────────────
-//  6. Entries table — last 90, scrollable
+//  6. Entries table (advanced only) — with filter
 // ─────────────────────────────────────────────
 function renderEntriesTable(stats) {
   const ts = stats.timeSeries;
   if (!ts || ts.length === 0) return '';
 
-  // Show newest first in the table
-  const rows = ts.slice().reverse().map(e => {
+  return `
+  <div class="settings-section-label">היסטוריית דגימות (${ts.length})</div>
+  <div class="entries-filter-row">
+    <button class="entries-filter-btn active" data-filter="all">הכל</button>
+    <button class="entries-filter-btn" data-filter="high-error">שגיאה גבוהה</button>
+    <button class="entries-filter-btn" data-filter="rated">עם דירוג</button>
+  </div>
+  <div class="glass entries-table" id="entries-table-wrap">
+    <div class="entries-row entries-head">
+      <div class="entries-cell entries-date">תאריך</div>
+      <div class="entries-cell entries-pred">תחזית</div>
+      <div class="entries-cell entries-actual">בפועל</div>
+      <div class="entries-cell entries-err">שגיאה</div>
+      <div class="entries-cell entries-rating">דירוג</div>
+    </div>
+    <div class="entries-scroll" id="entries-scroll">${buildRows(ts, 'all')}</div>
+  </div>`;
+}
+
+function buildRows(ts, filter) {
+  return ts.slice().reverse().filter(e => {
+    if (filter === 'high-error') {
+      const err = (e.predicted != null && e.reconstructed != null)
+        ? Math.abs(e.predicted - e.reconstructed) : 0;
+      return err >= 1.5;
+    }
+    if (filter === 'rated') return e.userRating != null;
+    return true;
+  }).map(e => {
     const err = (e.predicted != null && e.reconstructed != null)
       ? Math.round((e.predicted - e.reconstructed) * 10) / 10
       : null;
@@ -326,9 +443,10 @@ function renderEntriesTable(stats) {
                    : Math.abs(err) < 0.5    ? '#aaffcc'
                    : Math.abs(err) < 1.5    ? '#ffd580'
                    :                          '#ffaaaa';
-    const dateShort = e.date ? e.date.slice(5) : '—'; // MM-DD
+    const rowClass = (err != null && Math.abs(err) >= 2) ? ' entries-row-bad' : '';
+    const dateShort = e.date ? e.date.slice(5) : '—';
     return `
-      <div class="entries-row">
+      <div class="entries-row${rowClass}">
         <div class="entries-cell entries-date">${dateShort}</div>
         <div class="entries-cell entries-pred">${e.predicted != null ? e.predicted.toFixed(1) : '—'}</div>
         <div class="entries-cell entries-actual">${e.reconstructed != null ? e.reconstructed.toFixed(1) : '—'}</div>
@@ -336,19 +454,6 @@ function renderEntriesTable(stats) {
         <div class="entries-cell entries-rating">${e.userRating != null ? e.userRating.toFixed(1) : '—'}</div>
       </div>`;
   }).join('');
-
-  return `
-  <div class="settings-section-label">היסטוריית דגימות (${ts.length})</div>
-  <div class="glass entries-table">
-    <div class="entries-row entries-head">
-      <div class="entries-cell entries-date">תאריך</div>
-      <div class="entries-cell entries-pred">תחזית</div>
-      <div class="entries-cell entries-actual">בפועל</div>
-      <div class="entries-cell entries-err">שגיאה</div>
-      <div class="entries-cell entries-rating">דירוג</div>
-    </div>
-    <div class="entries-scroll">${rows}</div>
-  </div>`;
 }
 
 // ─────────────────────────────────────────────
@@ -367,7 +472,7 @@ function renderResetBtn() {
 // ─────────────────────────────────────────────
 //  Events
 // ─────────────────────────────────────────────
-function attachEvents() {
+function attachEvents(lStats) {
   document.getElementById('learning-back-btn')?.addEventListener('click', () => {
     showScreen('settings');
   });
@@ -376,8 +481,43 @@ function attachEvents() {
     if (!confirm('לאפס את כל נתוני הלמידה? לא ניתן לשחזור.')) return;
     clearLearningData();
     showToast('נתוני הלמידה אופסו', 'info');
-    initLearningScreen(); // re-render to show empty state
+    initLearningScreen();
   });
+
+  // Chart tooltip on tap
+  const chart = document.getElementById('learning-accuracy-chart');
+  const tooltip = document.getElementById('chart-tooltip');
+  if (chart && tooltip) {
+    chart.querySelectorAll('.chart-hit').forEach(rect => {
+      rect.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const d = rect.dataset;
+        tooltip.innerHTML = `<strong>${d.date}</strong><br>ניבוי: ${d.pred} · בפועל: ${d.recon}<br>הפרש: ${d.err}`;
+        tooltip.style.display = 'block';
+        // Position near tap
+        const chartRect = chart.getBoundingClientRect();
+        const tapX = ev.clientX - chartRect.left;
+        tooltip.style.left = Math.min(tapX, chartRect.width - 140) + 'px';
+      });
+    });
+    // Dismiss tooltip on tap outside
+    document.getElementById('screen-learning')?.addEventListener('click', () => {
+      tooltip.style.display = 'none';
+    });
+  }
+
+  // Table filter buttons (advanced mode)
+  const filterBtns = document.querySelectorAll('.entries-filter-btn');
+  const scrollWrap = document.getElementById('entries-scroll');
+  if (filterBtns.length && scrollWrap && lStats) {
+    filterBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        filterBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        scrollWrap.innerHTML = buildRows(lStats.timeSeries, btn.dataset.filter);
+      });
+    });
+  }
 }
 
 // ✓ learning-screen.js — complete

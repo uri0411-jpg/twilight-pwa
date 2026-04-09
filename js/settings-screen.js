@@ -3,7 +3,7 @@
 //  Notification wizard + toggles
 // ═══════════════════════════════════════════
 
-import { showToast } from './ui.js';
+import { showToast, isAdvancedMode, setDisplayMode } from './ui.js';
 import { showScreen } from './nav.js';
 import { clearAll } from './cache.js';
 import { clearLocation } from './location.js';
@@ -195,7 +195,17 @@ function buildSettingsHTML() {
             <div class="toggle-knob"></div>
           </div>
         </div>
+        <div class="settings-row" style="border-top:1px solid rgba(245,220,180,0.1)">
+          <div class="settings-row-label">
+            <svg width="18" height="18" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            מצב תצוגה מתקדם
+          </div>
+          <div class="toggle ${isAdvancedMode() ? 'on' : 'off'}" id="toggle-display-mode">
+            <div class="toggle-knob"></div>
+          </div>
+        </div>
       </div>
+      <div class="settings-row-hint">במצב מתקדם: נתונים טכניים, פרמטרים נלמדים, וטבלת היסטוריה</div>
     </div>
 
     <!-- ═══ CACHE CLEAR ═══ -->
@@ -243,6 +253,14 @@ function buildSettingsHTML() {
 
     <!-- ═══ LEARNING SYSTEM ENTRY ═══ -->
     ${buildLearningEntryButton()}
+
+    <!-- ═══ SHOW ONBOARDING AGAIN ═══ -->
+    <div class="settings-section" style="margin-top:4px">
+      <button class="learning-entry-btn" id="show-onboarding-btn" style="justify-content:center;gap:8px">
+        <svg width="18" height="18" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span style="font-size:13px;color:var(--cream-dim)">מה זה TWILIGHT?</span>
+      </button>
+    </div>
 
     <div style="text-align:center;padding:8px 0;font-size:11px;color:var(--cream-faint)">
       TWILIGHT v1.0 · דמדומים
@@ -313,6 +331,18 @@ function attachSettingsEvents() {
     });
   });
 
+  // Display mode toggle (basic / advanced)
+  const displayToggle = document.getElementById('toggle-display-mode');
+  if (displayToggle) {
+    displayToggle.addEventListener('click', () => {
+      const nowAdvanced = !isAdvancedMode();
+      setDisplayMode(nowAdvanced ? 'advanced' : 'basic');
+      displayToggle.classList.toggle('on',  nowAdvanced);
+      displayToggle.classList.toggle('off', !nowAdvanced);
+      showToast(nowAdvanced ? 'מצב מתקדם' : 'מצב בסיסי', 'info');
+    });
+  }
+
   document.getElementById('clear-cache-btn')?.addEventListener('click', () => {
     clearAll();
     showToast('המטמון נוקה', 'success');
@@ -336,6 +366,10 @@ function attachSettingsEvents() {
 
   document.getElementById('open-learning-btn')?.addEventListener('click', () => {
     showScreen('learning');
+  });
+
+  document.getElementById('show-onboarding-btn')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('twilight:showOnboarding'));
   });
 
   document.getElementById('import-backtest-btn')?.addEventListener('click', () => {
