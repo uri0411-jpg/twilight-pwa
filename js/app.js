@@ -3,7 +3,7 @@
 //  Entry point: boot sequence, navigation wiring
 // ═══════════════════════════════════════════
 
-import { initNav, showScreen, onScreenChange } from './nav.js';
+import { initNav, showScreen, onScreenChange, getCurrentScreen } from './nav.js';
 import { getGPS, saveLocation, loadLocation }  from './location.js';
 import { fetchWeek, fetchCityName, fetchAirQuality, fetchWesternHorizon, fetchSpots } from './api.js';
 import { calcWeekData }                        from './score.js';
@@ -20,6 +20,7 @@ import { initInstallPrompt }                   from './install-prompt.js';
 import { rearmSavedAlerts }                    from './notifications.js';
 import { initOnboarding }                      from './onboarding.js';
 import { scoreToLabel } from './utils.js';
+import { loadSkyMask } from './render/skyMask.js';
 
 // ─────────────────────────────────────────
 //  Score EMA — smooth scores across page loads to reduce noise from
@@ -115,6 +116,10 @@ async function boot() {
 
   showMainSkeleton();
   showLoading(true);
+
+  // Warm-up sky mask in parallel with GPS/weather fetch so background.jpg
+  // is decoded and the luminance mask is ready before first render.
+  loadSkyMask().catch(() => {});
 
   // Hard timeout safety net — if anything hangs (geolocation popup, slow network),
   // force an error after 30s instead of infinite loading
@@ -375,7 +380,7 @@ async function handleSetLocation(e) {
     // ── Critical path ends here ──────────────────────────────────────────────
     // Everything below is a non-critical side-effect (spots UI sync).
     // Failures must NOT propagate back into the catch block above.
-    const wasOnSpotsScreen = _spotsInitialized;
+    const wasOnSpotsScreen = getCurrentScreen() === 'spots'; // router is source of truth
     _spotsInitialized = false;
     invalidatePreloadedSpots();
 

@@ -32,7 +32,8 @@ let _favorites    = loadFavorites();
 let _visited      = loadVisited();
 let _leafletReady = false;
 let _visibleCount = 15;
-let _loadingSpots = false; // guard against parallel loadSpots() calls
+let _loadingSpots    = false; // guard against parallel loadSpots() calls
+let _spotsRequestId  = 0;    // increments on every loadSpots() call; stale responses are discarded
 
 // ─────────────────────────────────────────
 //  Lazy-load Leaflet CSS + JS on demand (5)
@@ -423,6 +424,7 @@ export async function initSpotsScreen(weekData) {
   // initLeafletMap calls updateMapMarkers itself when ready.
   initLeafletMap();
   if (!_loc) { showToast('לא נמצא מיקום — לחץ GPS', 'error'); return; }
+  _loadingSpots = false; // full re-init — allow new fetch even if a stale one is still in flight
   await loadSpots();
 }
 
@@ -661,6 +663,7 @@ async function loadSpots() {
     if (el) el.innerHTML = buildEmptyState('לא נמצא מיקום', 'לחץ "מיקום נוכחי" לאיתור');
     return;
   }
+  const reqId = ++_spotsRequestId; // stamp this request; stale responses bail out below
   _loadingSpots = true;
 
   // ── Pre-load fast path ──────────────────────────────────
@@ -692,7 +695,12 @@ async function loadSpots() {
   if (countEl) countEl.textContent = '';
 
   try {
-    _spots = await fetchSpots(_loc.lat, _loc.lon, _radiusKm);
+    const data = await fetchSpots(_loc.lat, _loc.lon, _radiusKm);
+
+    // Discard if a newer loadSpots() call started while we were awaiting
+    if (reqId !== _spotsRequestId) return;
+
+    _spots = data;
     _spots.forEach(s => {
       s._allScores = calcSpotScores(s, _weekData, _loc.lat, _loc.lon);
       s._driveMin = estimateDriveMin(s.dist);
@@ -715,13 +723,14 @@ async function loadSpots() {
     drawEventArc();
     checkGeofenceAlert(_spots, _weekData?.[0]?.score ?? 0);
   } catch (e) {
+    if (reqId !== _spotsRequestId) return; // stale error — ignore
     console.error('[spots] loadSpots failed:', e);
     _spots = [];
     if (heroEl) heroEl.innerHTML = '';
     const el = document.getElementById('spots-list');
     if (el) el.innerHTML = buildEmptyState('שגיאה בטעינת נקודות', 'בדוק חיבור ונסה שוב');
   } finally {
-    _loadingSpots = false;
+    if (reqId === _spotsRequestId) _loadingSpots = false;
   }
 }
 
