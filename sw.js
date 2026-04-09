@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 // 🔴 BUMP THIS ON EVERY DEPLOY (twl-v3, twl-v4, ...)
-const CACHE_NAME  = 'twl-v38';  // bumped: CSS v23 — forces fresh sky canvas CSS on pull-to-refresh
+const CACHE_NAME  = 'twl-v39';  // bumped: physics sky colors for all score elements (weekly/daily/spots)
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 250;         // ~6MB at ~25KB/tile — enough for region + new spot
 
