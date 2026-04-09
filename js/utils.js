@@ -6,45 +6,49 @@
 import { WIND_DIRS } from './config.js';
 
 /**
- * Metallic sunset color system
- * scoreToMetal(s) — returns full object { hex, gradient, text, glow, radial, edgeDark }
+ * Sky-derived background for score bars, badges, and strips.
+ * Replaces the old metallic palette with physics-driven sky colours.
+ *
+ * @param {number} score         1.0–10.0
+ * @param {object|null} skyColors  { skyTop, skyMid, horizon, sun } each {r,g,b}
+ * @returns {{ gradient:string, glow:string, strip:string }}
  */
-const SCORE_METALS = {
-  1:  { hex:'#2C3258', glow:'#384068', text:'#B0B8D0',
-        gradient:'linear-gradient(180deg,#3E4870 0%,#2C3258 25%,#202848 50%,#283050 75%,#384068 100%)',
-        radial:'radial-gradient(ellipse 60% 80% at 50% 40%,rgba(70,80,120,0.40) 0%,rgba(0,0,0,0) 100%)' },
-  2:  { hex:'#402878', glow:'#503890', text:'#D0C0E8',
-        gradient:'linear-gradient(180deg,#584098 0%,#402878 25%,#301868 50%,#382070 75%,#503890 100%)',
-        radial:'radial-gradient(ellipse 60% 80% at 50% 40%,rgba(100,70,160,0.40) 0%,rgba(0,0,0,0) 100%)' },
-  3:  { hex:'#682090', glow:'#7830A8', text:'#E8D0F8',
-        gradient:'linear-gradient(180deg,#8038B0 0%,#682090 25%,#581880 50%,#602088 75%,#7830A8 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(140,80,190,0.42) 0%,rgba(0,0,0,0) 100%)' },
-  4:  { hex:'#A01848', glow:'#B02860', text:'#F8D0E0',
-        gradient:'linear-gradient(180deg,#B82868 0%,#A01848 25%,#881038 50%,#981840 75%,#B02860 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(180,60,110,0.38) 0%,rgba(0,0,0,0) 100%)' },
-  5:  { hex:'#D01020', glow:'#D82030', text:'#FFD8D8',
-        gradient:'linear-gradient(180deg,#E02838 0%,#D01020 25%,#B80818 50%,#C81020 75%,#D82030 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(220,60,70,0.40) 0%,rgba(0,0,0,0) 100%)' },
-  6:  { hex:'#F52800', glow:'#F04010', text:'#FFE8E0',
-        gradient:'linear-gradient(180deg,#F84018 0%,#F52800 25%,#D82000 50%,#E83008 75%,#F04010 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(248,80,40,0.40) 0%,rgba(0,0,0,0) 100%)' },
-  7:  { hex:'#FF5000', glow:'#FF6010', text:'#180800',
-        gradient:'linear-gradient(180deg,#FF6818 0%,#FF5000 25%,#E04000 50%,#F04808 75%,#FF6010 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(255,120,50,0.42) 0%,rgba(0,0,0,0) 100%)' },
-  8:  { hex:'#FF8200', glow:'#FF8818', text:'#180800',
-        gradient:'linear-gradient(180deg,#FF9020 0%,#FF8200 25%,#E07000 50%,#F07808 75%,#FF8818 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(255,150,60,0.44) 0%,rgba(0,0,0,0) 100%)' },
-  9:  { hex:'#FFC000', glow:'#FFB820', text:'#180800',
-        gradient:'linear-gradient(180deg,#FFB828 0%,#FFC000 25%,#E0A800 50%,#F0B008 75%,#FFB820 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(255,200,60,0.48) 0%,rgba(0,0,0,0) 100%)' },
-  10: { hex:'#FFEE50', glow:'#FFE848', text:'#2A1800',
-        gradient:'linear-gradient(180deg,#FFE050 0%,#FFEE50 25%,#E8D020 50%,#F0D830 75%,#FFE848 100%)',
-        radial:'radial-gradient(ellipse 55% 75% at 50% 38%,rgba(255,240,100,0.55) 0%,rgba(0,0,0,0) 100%)' },
-};
+export function scoreToSkyBg(score, skyColors) {
+  const s = Math.max(1, Math.min(10, Number(score) || 5));
+  const t = (s - 1) / 9; // 0→1
 
-export function scoreToMetal(s) {
-  const n = Math.min(10, Math.max(1, Math.round(Number(s)) || 1));
-  return SCORE_METALS[n];
+  let rgb;
+  if (skyColors?.horizon) {
+    // Physics path — same piecewise lerp as scoreToSkyColor
+    if (t <= 1/3)      rgb = lerpRGB(skyColors.skyTop, skyColors.skyMid, t * 3);
+    else if (t <= 2/3) rgb = lerpRGB(skyColors.skyMid, skyColors.horizon, (t - 1/3) * 3);
+    else               rgb = lerpRGB(skyColors.horizon, skyColors.sun, (t - 2/3) * 3);
+  } else {
+    // Offline / pre-render fallback: score→hue ramp (blue→purple→red→orange→gold)
+    const hue = 220 - t * 190;
+    const sat = 0.35 + t * 0.30;
+    const lit = 0.38 + t * 0.15;
+    rgb = hslToRgb(hue, sat, lit);
+  }
+
+  // Boost saturation for visual impact on filled backgrounds
+  let hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  hsl.s = Math.max(hsl.s, 0.30 + t * 0.25);
+  // Darker lightness for backgrounds (text sits on top)
+  hsl.l = Math.max(0.15, Math.min(0.45, hsl.l * 0.7));
+  const base = hslToRgb(hsl.h, hsl.s, hsl.l);
+
+  // Lighter variant for gradient top
+  const light = hslToRgb(hsl.h, hsl.s * 0.9, Math.min(0.55, hsl.l + 0.12));
+  // Darker variant for gradient bottom
+  const dark = hslToRgb(hsl.h, hsl.s, Math.max(0.08, hsl.l - 0.10));
+
+  const hex = rgbToHex(base.r, base.g, base.b);
+  return {
+    gradient: `linear-gradient(180deg,${rgbToHex(light.r,light.g,light.b)} 0%,${hex} 50%,${rgbToHex(dark.r,dark.g,dark.b)} 100%)`,
+    glow: `${hex}88`,
+    strip: hex,
+  };
 }
 
 /**
@@ -137,26 +141,14 @@ function ensureContrast(r, g, b, bgLum, minRatio) {
 }
 
 /**
- * Continuous color from decimal score 1.0–10.0
- * Interpolates between adjacent SCORE_METALS hex colors
- */
-export function scoreToColorContinuous(score) {
-  const s = Math.max(1, Math.min(10, Number(score) || 5));
-  const lo = Math.max(1, Math.floor(s));
-  const hi = Math.min(10, lo + 1);
-  const t = s - lo;
-  return lerpColor(SCORE_METALS[lo].hex, SCORE_METALS[hi].hex, t);
-}
-
-/**
- * Physics-driven score color: sample the live sky gradient.
+ * Physics-driven score TEXT color: sample the live sky gradient.
  *   score 1 → skyTop (cool/muted)
  *   score 4 → skyMid (transitional)
  *   score 7 → horizon (warm/gold)
  *   score 10 → sun (bright gold/white)
  *
  * Includes WCAG contrast safeguard against the glass card background.
- * Falls back to SCORE_METALS when skyColors unavailable.
+ * Falls back to score→hue ramp when skyColors unavailable.
  *
  * @param {number} score            1.0–10.0
  * @param {object|null} skyColors   { skyTop, skyMid, horizon, sun } each {r,g,b}
@@ -164,19 +156,23 @@ export function scoreToColorContinuous(score) {
  * @returns {string} hex color
  */
 export function scoreToSkyColor(score, skyColors, cardBgLuma) {
-  if (!skyColors?.horizon) return scoreToColorContinuous(score);
-
   const s = Math.max(1, Math.min(10, Number(score) || 5));
   const t = (s - 1) / 9; // 0→1
 
-  // Piecewise lerp across 4 sky zones
   let rgb;
-  if (t <= 1/3) {
-    rgb = lerpRGB(skyColors.skyTop, skyColors.skyMid, t * 3);
-  } else if (t <= 2/3) {
-    rgb = lerpRGB(skyColors.skyMid, skyColors.horizon, (t - 1/3) * 3);
+  if (skyColors?.horizon) {
+    // Piecewise lerp across 4 sky zones
+    if (t <= 1/3) {
+      rgb = lerpRGB(skyColors.skyTop, skyColors.skyMid, t * 3);
+    } else if (t <= 2/3) {
+      rgb = lerpRGB(skyColors.skyMid, skyColors.horizon, (t - 1/3) * 3);
+    } else {
+      rgb = lerpRGB(skyColors.horizon, skyColors.sun, (t - 2/3) * 3);
+    }
   } else {
-    rgb = lerpRGB(skyColors.horizon, skyColors.sun, (t - 2/3) * 3);
+    // Offline fallback: score→hue ramp (blue→purple→red→orange→gold)
+    const hue = 220 - t * 190;
+    rgb = hslToRgb(hue, 0.35 + t * 0.30, 0.50 + t * 0.15);
   }
 
   // Boost saturation: physics sky colors tend to be desaturated (sat ~0.1-0.2)

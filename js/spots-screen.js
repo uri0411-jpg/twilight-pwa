@@ -5,7 +5,7 @@
 
 import { fetchSpots, fetchCityName } from './api.js';
 import { loadLocation, getGPS, saveLocation } from './location.js';
-import { scoreToColorContinuous, scoreToSkyColor, scoreToMetal, scoreToLabel, distKm, addMinutes, calcSolarAzimuth, destPoint } from './utils.js';
+import { scoreToSkyBg, scoreToSkyColor, scoreToLabel, distKm, addMinutes, calcSolarAzimuth, destPoint } from './utils.js';
 import { showToast, showLoading, logoImg, esc, getCardBgLuma } from './ui.js';
 import { haptic } from './nav.js';
 import { decide } from './engine/decisionEngine.js';
@@ -594,14 +594,14 @@ function updateMapMarkers(spots) {
     const eventScore = nextEvt.type === 'sunrise'
       ? (s._allScores?.[0]?.sr || 5)
       : (s._allScores?.[0]?.ss || 5);
-    const color = scoreToColorContinuous(sc);
+    const markerColor = scoreToSkyColor(sc, _weekData?.[0]?.skyColors, getCardBgLuma());
     const isFav = isFavorite(s.name, s.lat, s.lon);
     const isVis = isVisited(s.name, s.lat, s.lon);
     const size = isFav ? 18 : 14;
     const border = isVis ? '2px solid rgba(125,212,168,0.8)' : '2px solid rgba(255,255,255,0.6)';
     const num = idx + 1;
     const spotIcon = L.divIcon({
-      html: `<div class="spot-marker-num" style="width:${size}px;height:${size}px;background:${color};border:${border};border-radius:50%;box-shadow:0 0 8px ${color}88;display:flex;align-items:center;justify-content:center;font-size:${isFav ? 9 : 8}px;font-weight:800;color:#fff;font-family:Rubik,sans-serif;line-height:1">${num}</div>`,
+      html: `<div class="spot-marker-num" style="width:${size}px;height:${size}px;background:${markerColor};border:${border};border-radius:50%;box-shadow:0 0 8px ${markerColor}88;display:flex;align-items:center;justify-content:center;font-size:${isFav ? 9 : 8}px;font-weight:800;color:#fff;font-family:Rubik,sans-serif;line-height:1">${num}</div>`,
       iconSize: [size, size], iconAnchor: [size/2, size/2], className: ''
     });
     const eventLabel = nextEvt.type === 'sunrise' ? 'זריחה' : 'שקיעה';
@@ -791,22 +791,22 @@ function renderBestSpotHero() {
   const sc = best._allScores?.[0] || { combined: 5.0 };
   if (sc.combined < 4.5) { heroEl.innerHTML = ''; return; }
   const heroLoc = nextEvt.type === 'sunrise' ? best._locationQualitySunrise : best._locationQualitySunset;
-  const color = scoreToColorContinuous(sc.combined);
-  const metal = scoreToMetal(sc.combined);
+  const heroSkyBg = scoreToSkyBg(sc.combined, _weekData?.[0]?.skyColors);
+  const heroColor = scoreToSkyColor(sc.combined, _weekData?.[0]?.skyColors, getCardBgLuma());
   const today = _weekData?.[0];
   const heroEventTime = today ? (nextEvt.type === 'sunrise' ? today.sunrise : today.sunset) : null;
   const departure = heroEventTime ? calcDepartureTime(best._driveMin, heroEventTime, nextEvt.type) : null;
   const heroTitle = nextEvt.type === 'sunrise' ? 'הספוט הכי טוב לזריחה' : 'הספוט הכי טוב לשקיעה';
 
   heroEl.innerHTML = `
-  <div class="glass-strong spot-hero" style="--spot-color:${color}">
-    <div class="spot-hero-strip" style="background:${metal.gradient}"></div>
+  <div class="glass-strong spot-hero" style="--spot-color:${heroColor}">
+    <div class="spot-hero-strip" style="background:${heroSkyBg.strip}"></div>
     <div class="spot-hero-inner">
       <div class="spot-hero-top">
         <div style="font-size:10px;color:var(--gold);font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">${heroTitle}</div>
         <div style="display:flex;align-items:center;gap:10px">
           <div style="display:flex;flex-direction:column;gap:4px;align-items:center">
-            <div class="score-badge" style="background:${metal.gradient};border:1px solid ${color}55;color:${scoreToSkyColor(sc.combined, _weekData?.[0]?.skyColors, getCardBgLuma())};position:relative;overflow:hidden;width:44px;height:44px;font-size:15px">
+            <div class="score-badge" style="background:${heroSkyBg.gradient};border:1px solid ${heroColor}55;color:${heroColor};position:relative;overflow:hidden;width:44px;height:44px;font-size:15px">
               <div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div>
               <span style="position:relative;z-index:1">${fmtScore(sc.combined)}</span>
             </div>
@@ -863,8 +863,7 @@ function renderMiniWeekStrip(allScores) {
     <div class="spot-conditions-label">תחזית 5 ימים</div>
     <div class="spot-week-bar-row">
       ${allScores.slice(0, 5).map((sc, i) => {
-        const color = scoreToColorContinuous(sc.combined);
-        const metal = scoreToMetal(sc.combined);
+        const barSkyBg = scoreToSkyBg(sc.combined, _weekData?.[i]?.skyColors);
         let label = i < 2 ? dayLabels[i] : '';
         if (i >= 2) { const d = _weekData?.[i]?.date; if (d) label = days[new Date(d + 'T12:00:00').getDay()]; }
         return `
@@ -872,7 +871,7 @@ function renderMiniWeekStrip(allScores) {
           <div class="spot-week-bar-track">
             <div class="spot-week-bar-outer">
               <div class="spot-week-bar-score" style="color:${scoreToSkyColor(sc.combined, _weekData?.[i]?.skyColors, getCardBgLuma())}">${fmtScore(sc.combined)}</div>
-              <div class="spot-week-bar-fill" style="height:${sc.combined * 10}%;background:${metal.gradient}"></div>
+              <div class="spot-week-bar-fill" style="height:${sc.combined * 10}%;background:${barSkyBg.gradient}"></div>
             </div>
           </div>
           <div class="spot-week-bar-label">${label}</div>
@@ -973,8 +972,8 @@ function renderSpotsList() {
   listEl.innerHTML = visible.map((s, i) => {
     const scores = s._allScores || [{ ss: 5.0, sr: 5.0, tw: 5.0, combined: 5.0 }];
     const sc = scores[0];
-    const color = scoreToColorContinuous(sc.combined);
-    const metal = scoreToMetal(sc.combined);
+    const cardSkyBg = scoreToSkyBg(sc.combined, _weekData?.[0]?.skyColors);
+    const cardColor = scoreToSkyColor(sc.combined, _weekData?.[0]?.skyColors, getCardBgLuma());
     const bearing = s._bearing || 0;
     const dirLabel = bearingToHeb(bearing);
     const driveMin = s._driveMin || 0;
@@ -1004,14 +1003,14 @@ function renderSpotsList() {
       : '';
 
     return `
-    <div class="glass spot-card spot-card-anim" style="--spot-color:${color};--anim-delay:${i * 60}ms">
-      <div class="spot-color-strip" style="background:${metal.gradient}"></div>
+    <div class="glass spot-card spot-card-anim" style="--spot-color:${cardColor};--anim-delay:${i * 60}ms">
+      <div class="spot-color-strip" style="background:${cardSkyBg.strip}"></div>
       <div class="spot-card-inner">
         <div class="spot-header" onclick="toggleSpot(${i})">
           <div class="spot-header-right">
             <div style="display:flex;flex-direction:column;gap:4px;align-items:center;flex-shrink:0">
               <div>
-                <div class="score-badge" style="background:${metal.gradient};border:1px solid ${color}55;color:${scoreToSkyColor(sc.combined, _weekData?.[0]?.skyColors, getCardBgLuma())};position:relative;overflow:hidden">
+                <div class="score-badge" style="background:${cardSkyBg.gradient};border:1px solid ${cardColor}55;color:${cardColor};position:relative;overflow:hidden">
                   <div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div>
                   <span style="position:relative;z-index:1;font-size:14px">${fmtScore(sc.combined)}</span>
                 </div>
@@ -1027,7 +1026,7 @@ function renderSpotsList() {
             <div class="spot-header-info">
               <div class="spot-name">
                 <span class="spot-rank-badge" title="דירוג לפי איכות צפייה">${i + 1}</span>
-                <span class="spot-type-icon" style="color:${color}">${getTypeIcon(s.type)}</span>
+                <span class="spot-type-icon" style="color:${cardColor}">${getTypeIcon(s.type)}</span>
                 <span class="spot-name-text">${esc(s.name)}</span>
               </div>
               <div class="spot-meta">

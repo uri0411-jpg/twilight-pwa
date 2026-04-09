@@ -3,7 +3,7 @@
 //  Cinematic: dynamic glow, progress bars, haptic
 // ═══════════════════════════════════════════
 
-import { scoreToColorContinuous, scoreToMetal, scoreToLabel, shortDate, buildGaugeArc, getSmartRecommendation, trendArrow, addMinutes, scoreToSkyColor } from './utils.js';
+import { scoreToSkyBg, scoreToLabel, shortDate, buildGaugeArc, getSmartRecommendation, trendArrow, addMinutes, scoreToSkyColor } from './utils.js';
 import { scheduleAlert, cancelAlert, getSavedAlerts, requestNotificationPermission } from './notifications.js';
 import { logoImg, updateDynamicGradient, getCardBgLuma } from './ui.js';
 import { recordUserRating, hasRatedToday } from './calibration.js';
@@ -77,24 +77,52 @@ function _updateLiveScoreColors(skyColors, mainScore) {
     gaugeArc.style.filter = `drop-shadow(0 0 6px ${mainColor}66)`;
   }
 
-  // 2. Week bar scores, hourly scores, event scores — ALL screens
+  // 2. Week bar scores, hourly scores, event scores — ALL screens (text color)
   for (const el of document.querySelectorAll('.week-bar-score, .hourly-score, .event-score-num, .spot-week-bar-score, .spot-score-cell-main .spot-score-num')) {
     const s = parseFloat(el.textContent);
     if (!isNaN(s)) el.style.color = scoreToSkyColor(s, skyColors, bgLuma);
   }
 
-  // 3. Score badges — text + border tint — ALL screens (exclude location badges)
+  // 3. Week bar fills — background gradient from sky colors
+  for (const el of document.querySelectorAll('.week-bar-fill')) {
+    const scoreEl = el.querySelector('.week-bar-score');
+    const s = scoreEl ? parseFloat(scoreEl.textContent) : NaN;
+    if (!isNaN(s)) {
+      const bg = scoreToSkyBg(s, skyColors);
+      el.style.background = bg.gradient;
+      el.style.boxShadow = `0 0 8px ${bg.glow}`;
+    }
+  }
+
+  // 4. Score badges — text + border tint + background — ALL screens (exclude location badges)
   for (const el of document.querySelectorAll('.score-badge:not(.score-badge-location)')) {
     const span = el.querySelector('span');
     const s = span ? parseFloat(span.textContent) : NaN;
     if (!isNaN(s)) {
       const c = scoreToSkyColor(s, skyColors, bgLuma);
+      const bg = scoreToSkyBg(s, skyColors);
       el.style.color = c;
       el.style.borderColor = c + '55';
+      el.style.background = bg.gradient;
     }
   }
 
-  // 4. Gauge glow — match physics color
+  // 5. Spot color strips + hero strips — background
+  for (const el of document.querySelectorAll('.spot-color-strip, .spot-hero-strip')) {
+    const card = el.closest('.spot-card, .spot-hero');
+    const scoreEl = card?.querySelector('.score-badge:not(.score-badge-location) span');
+    const s = scoreEl ? parseFloat(scoreEl.textContent) : NaN;
+    if (!isNaN(s)) el.style.background = scoreToSkyBg(s, skyColors).strip;
+  }
+
+  // 6. Spot mini week bar fills
+  for (const el of document.querySelectorAll('.spot-week-bar-fill')) {
+    const scoreEl = el.parentElement?.querySelector('.spot-week-bar-score');
+    const s = scoreEl ? parseFloat(scoreEl.textContent) : NaN;
+    if (!isNaN(s)) el.style.background = scoreToSkyBg(s, skyColors).gradient;
+  }
+
+  // 7. Gauge glow — match physics color
   const gaugeWrap = document.querySelector('.score-gauge-wrap');
   if (gaugeWrap) gaugeWrap.style.setProperty('--glow-color', mainColor + '30');
 }
@@ -915,12 +943,11 @@ function renderWeekBars(weekData) {
       label = dayLetters[dt.getDay()];
     }
     const ds = (_spotAvgScores != null && _spotAvgScores[i] != null) ? _spotAvgScores[i] : d.score;
-    const metal = scoreToMetal(ds);
+    const skyBg = scoreToSkyBg(ds, d.skyColors);
     return `
     <div class="week-bar-item" onclick="toggleDaily(${i})">
       <div class="week-bar-track">
-        <div class="week-bar-fill" style="height:${ds * 10}%;background:${metal.gradient};box-shadow:0 0 8px ${metal.glow}55;position:relative;overflow:hidden;animation:barGrow 0.5s cubic-bezier(0.34,1.56,0.64,1) both;animation-delay:${i * 55}ms">
-          <div style="position:absolute;inset:0;${metal.radial ? 'background:' + metal.radial : ''}"></div>
+        <div class="week-bar-fill" style="height:${ds * 10}%;background:${skyBg.gradient};box-shadow:0 0 8px ${skyBg.glow};position:relative;overflow:hidden;animation:barGrow 0.5s cubic-bezier(0.34,1.56,0.64,1) both;animation-delay:${i * 55}ms">
           <div style="position:absolute;top:0;left:0;width:20%;height:100%;background:linear-gradient(90deg,rgba(0,0,0,0.22) 0%,rgba(0,0,0,0) 100%)"></div>
           <div style="position:absolute;top:0;right:0;width:20%;height:100%;background:linear-gradient(270deg,rgba(0,0,0,0.22) 0%,rgba(0,0,0,0) 100%)"></div>
           <div style="position:absolute;top:0;left:10%;right:10%;height:45%;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.30) 0%,rgba(255,255,255,0) 100%)"></div>
@@ -988,7 +1015,7 @@ function renderHourlyStrip(hourlyFull, skyColors) {
 function renderDailyCards(weekData) {
   return weekData.map((d, i) => {
     const ds = (_spotAvgScores != null && _spotAvgScores[i] != null) ? _spotAvgScores[i] : d.score;
-    const dsMetal = scoreToMetal(ds);
+    const dsSkyBg = scoreToSkyBg(ds, d.skyColors);
     const dsColor = scoreToSkyColor(ds, d.skyColors, getCardBgLuma());
     return `
     <div class="glass daily-card" style="margin-bottom:8px">
@@ -996,7 +1023,7 @@ function renderDailyCards(weekData) {
       <!-- HEADER -->
       <div class="daily-header" onclick="toggleDaily(${i})" style="cursor:pointer;padding:14px 16px">
         <div style="display:flex;align-items:center;gap:10px">
-          <div class="score-badge" style="background:${dsMetal.gradient};border:1px solid ${dsColor}55;color:${dsColor};position:relative;overflow:hidden" ${ds >= 7 ? 'data-shimmer' : ''}><div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div><span style="position:relative;z-index:1;font-size:13px">${ds.toFixed(1)}</span></div>
+          <div class="score-badge" style="background:${dsSkyBg.gradient};border:1px solid ${dsColor}55;color:${dsColor};position:relative;overflow:hidden" ${ds >= 7 ? 'data-shimmer' : ''}><div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0) 100%)"></div><span style="position:relative;z-index:1;font-size:13px">${ds.toFixed(1)}</span></div>
           <div>
             <div style="font-weight:700;font-size:15px;color:var(--cream)">${d.day} · ${d.shortDate}</div>
             <div style="font-size:11px;color:var(--cream-faint)">${d.cond}</div>
