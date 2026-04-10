@@ -25,6 +25,13 @@
   --glass-saturate: 120%;
   --font-body:     'Rubik', 'Heebo', sans-serif;
   --font-spot:     'Playfair Display', serif;
+  /* Score tier palette — updated dynamically by startLiveGradient() */
+  --score-high-color: #FFD060;
+  --score-high-glow:  rgba(255,200,50,0.40);
+  --score-mid-color:  #FF8C30;
+  --score-mid-glow:   rgba(255,120,30,0.30);
+  --score-low-color:  #7090C8;
+  --score-low-glow:   rgba(80,100,200,0.20);
 }
 
 /* ─── RESET ─── */
@@ -302,20 +309,27 @@ body.has-install-banner .screen { padding-top: 56px; }
 }
 
 /* ─── CINEMATIC ANIMATIONS ─── */
-/* scoreGlow and scoreGlowSubtle now animate opacity only (compositor-only,
-   no repaint).  The visible glow is provided by a static box-shadow on the
-   score gauge element so that the GPU layer is never dirtied by filter changes. */
-@keyframes scoreGlow {
-  0%, 100% { opacity: 0.82; }
-  50%       { opacity: 1.00; }
-}
-@keyframes scoreGlowSubtle {
-  0%, 100% { opacity: 0.65; }
-  50%       { opacity: 0.88; }
+/* gaugeGlowPulse: replaces scoreGlow/scoreGlowSubtle.
+   Uses only opacity + transform — compositor-only, no repaint. */
+@keyframes gaugeGlowPulse {
+  0%, 100% { opacity: 0.65; transform: translate(-50%, -55%) scale(1.00); }
+  50%       { opacity: 1.00; transform: translate(-50%, -55%) scale(1.14); }
 }
 @keyframes breathe {
   0%, 100% { opacity: 0.7; }
   50%      { opacity: 1; }
+}
+/* Gauge entrance — morphic scale+rotate pop with spring overshoot */
+@keyframes gaugeScaleIn {
+  0%   { transform: scale(0.78) rotate(-6deg); opacity: 0; }
+  55%  { transform: scale(1.05) rotate(1deg);  opacity: 1; }
+  78%  { transform: scale(0.97) rotate(0deg); }
+  100% { transform: scale(1)    rotate(0deg); }
+}
+/* Arc fill — opacity fade-in (dasharray is driven by JS transition) */
+@keyframes arcDraw {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(20px); }
@@ -325,16 +339,44 @@ body.has-install-banner .screen { padding-top: 56px; }
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-@keyframes shimmer {
-  0%   { background-position: -200% center; }
-  100% { background-position: 200% center; }
+/* Badge cinematic sweep — background-position slide */
+@keyframes badgeSweep {
+  0%        { background-position: -220% center; }
+  45%, 100% { background-position:  220% center; }
+}
+@keyframes badgeBorderPulse {
+  0%, 100% { box-shadow: 0 0 0px transparent; }
+  50%       { box-shadow: 0 0 10px var(--score-high-glow); }
 }
 @keyframes heroEntrance {
   from { opacity: 0; transform: translateY(16px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+/* Week bars: overshoot bounce on entry */
 @keyframes barGrow {
-  from { height: 0%; }
+  0%   { height: 0%;    opacity: 0; transform: scaleX(0.75); }
+  55%  { height: 108%;  opacity: 1; transform: scaleX(1.03); }
+  80%  { height: 96%; }
+  100% { height: var(--bar-h, 100%); opacity: 1; transform: scaleX(1); }
+}
+/* Hourly bars: simple wave fade-grow */
+@keyframes hourlyBarIn {
+  from { transform: scaleY(0); opacity: 0; }
+  to   { transform: scaleY(1); opacity: 1; }
+}
+/* Stat pills: slide-up entrance */
+@keyframes pillIn {
+  0%   { opacity: 0; transform: translateY(9px) scale(0.91); }
+  100% { opacity: 1; transform: translateY(0)   scale(1); }
+}
+/* Trend arrow directional bounce */
+@keyframes arrowBounceUp {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-4px); }
+}
+@keyframes arrowBounceDown {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(4px); }
 }
 @keyframes screenSlideIn {
   from { opacity: 0; transform: translateX(-24px); }
@@ -563,10 +605,9 @@ body.has-install-banner .screen { padding-top: 56px; }
 }
 
 /* ─── LOCATION SEARCH BAR ─── */
-/* Animation: height 0 → var(--bar-open-height) — measured by JS before toggle.
-   This eliminates the max-height overshoot jank (animating empty space).
-   JS sets --bar-open-height = element.scrollHeight before classList.add('open').
-   Open easing: slight spring overshoot (cubic-bezier 0.34,1.10,0.64,1).
+/* Animation: max-height 0 → 200px — compositor-friendly alternative to height animation.
+   max-height avoids layout reflow on every frame; the safe ceiling (200px) is well above
+   the tallest possible content (~120px). Open easing: slight spring overshoot.
    Close easing: standard ease-in — asymmetric close feels snappier. */
 .location-search-bar {
   display: flex;
@@ -576,16 +617,16 @@ body.has-install-banner .screen { padding-top: 56px; }
   background: var(--glass);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-card);
-  overflow: hidden;          /* required for height:0 clipping */
-  height: 0;
+  overflow: hidden;
+  max-height: 0;
   opacity: 0;
   pointer-events: none;
-  transition: height  0.28s cubic-bezier(0.34, 1.10, 0.64, 1),
-              opacity 0.22s ease,
-              padding 0.28s ease;
+  transition: max-height 0.30s cubic-bezier(0.34, 1.10, 0.64, 1),
+              opacity    0.22s ease,
+              padding    0.28s ease;
 }
 .location-search-bar.open {
-  height: var(--bar-open-height, 120px); /* default fallback if JS hasn't run yet */
+  max-height: 200px;
   opacity: 1;
   pointer-events: auto;
   padding: 12px 14px;
@@ -628,17 +669,22 @@ body.has-install-banner .screen { padding-top: 56px; }
   align-items: center;
   gap: 2px;
   position: relative;
+  animation: gaugeScaleIn 0.85s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .score-gauge-wrap svg {
   display: block;
 }
-/* Dynamic glow ring behind gauge — intensity varies by data-score-tier */
+/* Arc fill: fade-in on entry, dasharray driven by JS transition */
+.gauge-arc-fill {
+  animation: arcDraw 0.9s ease 0.15s both;
+}
+/* Primary glow ring — default (no tier) */
 .score-gauge-wrap::before {
   content: '';
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -55%);
+  transform: translate(-50%, -55%) scale(1);
   width: 110px;
   height: 110px;
   border-radius: 50%;
@@ -647,27 +693,57 @@ body.has-install-banner .screen { padding-top: 56px; }
   animation: breathe 3s ease-in-out infinite;
   pointer-events: none;
   z-index: -1;
+  will-change: opacity, transform;
+}
+/* Aurora ellipse layer — offset for depth */
+.score-gauge-wrap::after {
+  content: '';
+  position: absolute;
+  width: 170px;
+  height: 80px;
+  top: 38%;
+  left: 50%;
+  transform: translateX(-50%) rotate(-12deg);
+  background: radial-gradient(ellipse at center, var(--glow-color, rgba(212,130,10,0.10)) 0%, transparent 70%);
+  filter: blur(22px);
+  animation: gaugeGlowPulse 5s ease-in-out infinite 1.8s;
+  pointer-events: none;
+  z-index: -1;
+  will-change: opacity, transform;
 }
 /* High score = strong warm glow */
 .score-gauge-wrap[data-score-tier="high"]::before {
-  --glow-color: rgba(255,200,50,0.20);
-  width: 130px; height: 130px;
-  opacity: 0.9;
-  animation: scoreGlow 2.5s ease-in-out infinite;
+  background: radial-gradient(circle, var(--score-high-glow) 0%, transparent 70%);
+  width: 150px; height: 150px;
+  opacity: 0.95;
+  animation: gaugeGlowPulse 2.2s ease-in-out infinite;
 }
-.score-gauge-wrap[data-score-tier="high"] svg {
-  --glow-color: rgba(255,200,50,0.30);
-  animation: scoreGlow 2.5s ease-in-out infinite;
+.score-gauge-wrap[data-score-tier="high"]::after {
+  background: radial-gradient(ellipse at center, var(--score-high-glow) 0%, transparent 70%);
+  animation: gaugeGlowPulse 5.5s ease-in-out infinite 2s;
+  opacity: 0.7;
 }
-/* Mid score = warm ambient */
+/* Mid score = warm amber ambient */
 .score-gauge-wrap[data-score-tier="mid"]::before {
-  --glow-color: rgba(255,120,20,0.12);
-  animation: breathe 3.5s ease-in-out infinite;
+  background: radial-gradient(circle, var(--score-mid-glow) 0%, transparent 70%);
+  width: 130px; height: 130px;
+  opacity: 0.75;
+  animation: gaugeGlowPulse 3.2s ease-in-out infinite;
 }
-/* Low score = dim cool */
+.score-gauge-wrap[data-score-tier="mid"]::after {
+  background: radial-gradient(ellipse at center, var(--score-mid-glow) 0%, transparent 70%);
+  opacity: 0.45;
+}
+/* Low score = dim cool blue */
 .score-gauge-wrap[data-score-tier="low"]::before {
-  --glow-color: rgba(60,60,140,0.08);
-  animation: scoreGlowSubtle 4s ease-in-out infinite;
+  background: radial-gradient(circle, var(--score-low-glow) 0%, transparent 70%);
+  width: 110px; height: 110px;
+  opacity: 0.55;
+  animation: gaugeGlowPulse 4.5s ease-in-out infinite;
+}
+.score-gauge-wrap[data-score-tier="low"]::after {
+  background: radial-gradient(ellipse at center, var(--score-low-glow) 0%, transparent 70%);
+  opacity: 0.30;
 }
 .score-desc {
   font-size: 12px;
@@ -743,7 +819,22 @@ body.has-install-banner .screen { padding-top: 56px; }
 .explainer-bar-fill {
   height: 100%;
   border-radius: 3px;
-  transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  background: linear-gradient(90deg,
+    var(--score-mid-color, #FF8C30) 0%,
+    var(--score-high-color, #FFD060) 100%);
+  box-shadow: 2px 0 8px var(--score-mid-glow, rgba(255,120,30,0.35));
+  position: relative;
+  transition: width 0.75s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+/* Light pip at the leading edge */
+.explainer-bar-fill::after {
+  content: '';
+  position: absolute;
+  right: -1px; top: 0; bottom: 0;
+  width: 3px;
+  background: rgba(255,255,255,0.55);
+  border-radius: 2px;
+  filter: blur(1px);
 }
 .explainer-value {
   font-size: 11px;
@@ -788,6 +879,10 @@ body.has-install-banner .screen { padding-top: 56px; }
 .trend-label {
   font-size: 10px;
 }
+/* Direction-driven arrow bounce */
+.trend-badge[data-dir="up"]   .trend-arrow { animation: arrowBounceUp   1.8s ease-in-out infinite; color: #7fd87f; }
+.trend-badge[data-dir="down"] .trend-arrow { animation: arrowBounceDown 1.8s ease-in-out infinite; color: #ff8888; }
+.trend-badge[data-dir="flat"] .trend-arrow { color: var(--cream-faint); }
 
 /* ─── LOGO CIRCLE — clips transparent PNG to circle ─── */
 .logo-circle {
@@ -1099,6 +1194,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   position: relative;
   overflow: hidden;
   transition: all 0.3s ease;
+  animation: pillIn 0.4s ease both;
 }
 /* Progress fill inside stat pills — set --fill-pct via JS */
 .stat-pill::after {
@@ -1111,7 +1207,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   background: linear-gradient(0deg, rgba(212,130,10,0.12) 0%, transparent 100%);
   border-radius: 20px;
   pointer-events: none;
-  transition: height 0.5s ease;
+  transition: height 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .stat-pill[data-optimal="true"]::after {
   background: linear-gradient(0deg, rgba(70,180,70,0.15) 0%, transparent 100%);
@@ -1163,7 +1259,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   padding-top: 3px;
   transition: height 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
   min-height: 10%;
-  animation: barGrow 0.6s ease both;
+  animation: barGrow 0.75s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .week-bar-score {
   font-size: 10px;
@@ -1218,7 +1314,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   color: rgba(160, 185, 210, 0.9);
   flex-shrink: 0;
 }
-/* Shimmer sweep on high-score badges */
+/* Cinematic sweep on high-score badges */
 .score-badge[data-shimmer]::after {
   content: '';
   position: absolute;
@@ -1226,14 +1322,15 @@ body.has-install-banner .screen { padding-top: 56px; }
   border-radius: inherit;
   background: linear-gradient(
     105deg,
-    transparent 30%,
-    rgba(255,255,255,0.15) 45%,
-    rgba(255,255,255,0.25) 50%,
-    rgba(255,255,255,0.15) 55%,
-    transparent 70%
+    transparent 20%,
+    rgba(255,255,255,0.07) 36%,
+    rgba(255,255,255,0.20) 50%,
+    rgba(255,255,255,0.07) 64%,
+    transparent 80%
   );
-  background-size: 200% 100%;
-  animation: shimmer 3s ease-in-out infinite;
+  background-size: 250% 100%;
+  animation: badgeSweep 3.5s ease-in-out infinite,
+             badgeBorderPulse 3.5s ease-in-out infinite;
   pointer-events: none;
 }
 .time-mini {
@@ -1277,6 +1374,8 @@ body.has-install-banner .screen { padding-top: 56px; }
   justify-content: center;
   padding-top: 2px;
   min-height: 8%;
+  transform-origin: bottom center;
+  animation: hourlyBarIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .hourly-bar-val { font-size: 9px; font-weight: 800; color: var(--brown-dark); }
 .hourly-bar-time { font-size: 9px; color: var(--cream-faint); white-space: nowrap; }
@@ -1970,23 +2069,48 @@ body.has-install-banner .screen { padding-top: 56px; }
   color: #7dd4a8 !important;
 }
 
-/* ─── "Now" badge pulse ─── */
+/* ─── "Now" badge pulse — compositor-only (transform+opacity, no box-shadow paint) ─── */
 .spot-badge-now {
+  position: relative;
+  overflow: visible;
+}
+.spot-badge-now::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 1.5px solid rgba(240,184,74,0.65);
   animation: badge-now-pulse 2s ease-in-out infinite;
+  pointer-events: none;
 }
 @keyframes badge-now-pulse {
-  0%, 100% { box-shadow: none; }
-  50% { box-shadow: 0 0 8px rgba(240,184,74,0.5); }
+  0%, 100% { opacity: 0.75; transform: scale(1);    }
+  50%       { opacity: 0;    transform: scale(1.28); }
 }
 
-/* ─── Map ↔ List sync ─── */
+/* ─── Map ↔ List sync — compositor-only (pseudo-element opacity, no box-shadow paint) ─── */
 .spot-card-highlight {
   animation: card-glow 2.5s ease-out !important;
+  position: relative;
+  overflow: visible;
+}
+.spot-card-highlight::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1.5px solid rgba(240,184,74,0.7);
+  animation: card-glow-ring 2.5s ease-out forwards;
+  pointer-events: none;
 }
 @keyframes card-glow {
-  0%   { box-shadow: 0 0 0 0 rgba(240,184,74,0.6); }
-  15%  { box-shadow: 0 0 16px 4px rgba(240,184,74,0.5); }
-  100% { box-shadow: none; }
+  0%   { opacity: 1; }
+  100% { opacity: 1; }
+}
+@keyframes card-glow-ring {
+  0%   { opacity: 0.9; transform: scale(1);    }
+  15%  { opacity: 0.7; transform: scale(1.01); }
+  100% { opacity: 0;   transform: scale(1.03); }
 }
 .spot-marker-pulse > div {
   animation: marker-scale 0.8s ease-out;
@@ -2365,21 +2489,29 @@ body.has-install-banner .screen { padding-top: 56px; }
 /* ═══════════════════════════════════════════
    SKELETON LOADING CARDS
 ═══════════════════════════════════════════ */
+/* skeletonShimmer — translateX on pseudo-element (compositor-only, no background-position paint) */
 @keyframes skeletonShimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%);  }
 }
 .skeleton-line {
   display: block;
+  position: relative;
+  overflow: hidden;
+  background: rgba(245,220,180,0.05);
+  border-radius: 6px;
+}
+.skeleton-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   background: linear-gradient(
     90deg,
-    rgba(245,220,180,0.05) 25%,
-    rgba(245,220,180,0.13) 50%,
-    rgba(245,220,180,0.05) 75%
+    transparent 0%,
+    rgba(245,220,180,0.12) 50%,
+    transparent 100%
   );
-  background-size: 200% 100%;
-  animation: skeletonShimmer 1.6s ease infinite;
-  border-radius: 6px;
+  animation: skeletonShimmer 1.6s ease-in-out infinite;
 }
 .skeleton-card {
   background: var(--glass);
@@ -2646,8 +2778,12 @@ a:focus-visible,
     animation-duration: 0.8s !important;
     animation-iteration-count: infinite !important;
   }
-  /* Accessibility: remove decorative glow halo entirely for reduced-motion users */
-  .score-gauge-wrap::before { display: none !important; }
+  /* Accessibility: remove decorative glow halos entirely for reduced-motion users */
+  .score-gauge-wrap::before,
+  .score-gauge-wrap::after { display: none !important; }
+  /* Disable pseudo-element pulse/shimmer animations added in v46 */
+  .spot-badge-now::after,
+  .skeleton-line::after { animation: none !important; }
 }
 
 /* ═══════════════════════════════════════════
@@ -3478,3 +3614,4 @@ body.night-vision .quick-alert-fab {
   line-height: 1.4;
   opacity: 0.8;
 }
+

@@ -70,13 +70,27 @@ function _updateLiveScoreColors(skyColors, mainScore) {
   const gaugeText = document.querySelector('.gauge-score-text');
   if (gaugeText) {
     gaugeText.setAttribute('fill', mainColor);
-    gaugeText.style.filter = `drop-shadow(0 0 12px ${mainColor}44)`;
+    // Three-layer glow: near bloom, mid halo, dark grounding shadow
+    gaugeText.style.filter =
+      `drop-shadow(0 0 18px ${mainColor}BB) ` +
+      `drop-shadow(0 0 6px ${mainColor}66) ` +
+      `drop-shadow(0 2px 4px rgba(0,0,0,0.65))`;
   }
   const gaugeArc = document.querySelector('.gauge-arc-fill');
   if (gaugeArc) {
     gaugeArc.setAttribute('stroke', mainColor);
-    gaugeArc.style.filter = `drop-shadow(0 0 6px ${mainColor}66)`;
+    gaugeArc.style.filter =
+      `drop-shadow(0 0 10px ${mainColor}99) ` +
+      `drop-shadow(0 0 4px ${mainColor}55)`;
   }
+
+  // Update score tier CSS variables for glow layers + animations
+  const tier = mainScore >= 7 ? 'high' : mainScore >= 4 ? 'mid' : 'low';
+  const root = document.documentElement;
+  root.style.setProperty(`--score-${tier}-color`, mainColor);
+  root.style.setProperty(`--score-${tier}-glow`, mainColor + '55');
+  // Also update --glow-color (used by default ::before ring)
+  root.style.setProperty('--glow-color', mainColor + '30');
 
   // 2. Week bar scores, hourly scores, event scores — ALL screens (text color)
   for (const el of document.querySelectorAll('.week-bar-score, .hourly-score, .event-score-num, .spot-week-bar-score, .spot-score-cell-main .spot-score-num')) {
@@ -123,9 +137,11 @@ function _updateLiveScoreColors(skyColors, mainScore) {
     if (!isNaN(s)) el.style.background = scoreToSkyBg(s, skyColors).gradient;
   }
 
-  // 7. Gauge glow — match physics color
+  // 7. data-score-tier refresh (score may drift across tier boundary at runtime)
   const gaugeWrap = document.querySelector('.score-gauge-wrap');
-  if (gaugeWrap) gaugeWrap.style.setProperty('--glow-color', mainColor + '30');
+  if (gaugeWrap) {
+    gaugeWrap.dataset.scoreTier = tier;
+  }
 }
 
 // ─────────────────────────────────────────
@@ -381,6 +397,15 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
   if (!container) return;
 
   container.innerHTML = buildMainHTML(loc, city, weekData);
+
+  // Trigger gauge arc draw: two rAF frames ensure the browser has painted
+  // the initial stroke-dasharray:0 before we set the target (activating transition).
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    for (const arc of container.querySelectorAll('.gauge-arc-fill[data-arc-target]')) {
+      arc.style.strokeDasharray = arc.dataset.arcTarget;
+    }
+  }));
+
   attachMainEvents();
   startCountdown(weekData[0]);
 
@@ -525,7 +550,7 @@ function startCountdown(today) {
 //  Score sparkline — tiny SVG trajectory chart
 //  Shows score arc for ±3h around sunset event.
 // ─────────────────────────────────────────
-function buildScoreSparkline(hourlyFull, sunsetStr) {
+function buildScoreSparkline(hourlyFull, sunsetStr, skyColors) {
   if (!hourlyFull || hourlyFull.length < 3) return '';
 
   // Find sunset index; if absent, use the highest-score hour
@@ -561,7 +586,8 @@ function buildScoreSparkline(hourlyFull, sunsetStr) {
   // Peak dot
   const pkX = (PAD + peakIdx * xStep).toFixed(1);
   const pkY = (H - PAD - peakVal * yScale).toFixed(1);
-  const pkColor = peakVal >= 7 ? '#F0B84A' : peakVal >= 4 ? '#D4820A' : 'rgba(245,230,200,0.5)';
+  // Physics-driven peak color — matches week bar / score badge colors exactly.
+  const pkColor = scoreToSkyColor(peakVal, skyColors, 0.08);
 
   // Sunset marker vertical line
   const relSsIdx = ssIdx - start;
@@ -922,13 +948,13 @@ function buildMainHTML(loc, city, weekData) {
     <div class="glass-strong score-card">
       <div class="score-top">
         <!-- Gauge arc (replaces plain number) -->
-        <div class="score-gauge-wrap" data-score-tier="${displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low'}">
+        <div class="score-gauge-wrap" role="status" aria-live="polite" aria-label="ציון שקיעה: ${displayScore.toFixed(1)} מתוך 10" data-score-tier="${displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low'}">
           ${buildGaugeArc(displayScore, displayColor, 130)}
           <div class="score-desc">${displayLabel}</div>
           ${today.palette?.styleHe ? `<div class="palette-badge">✦ ${today.palette.styleHe}</div>` : ''}
           <!-- Trend arrow -->
           ${trend.arrow ? `
-          <div class="trend-badge" style="${trend.css}">
+          <div class="trend-badge" style="${trend.css}" data-dir="${trend.dir}">
             <span class="trend-arrow">${trend.arrow}</span>
             <span class="trend-label">${trend.label}</span>
           </div>` : ''}
@@ -955,7 +981,7 @@ function buildMainHTML(loc, city, weekData) {
       </div>
 
       <!-- Score trajectory sparkline -->
-      ${buildScoreSparkline(today.hourlyFull, today.sunset)}
+      ${buildScoreSparkline(today.hourlyFull, today.sunset, today.skyColors)}
 
       <!-- Tier-2 explainer tray (tap gauge to reveal) -->
       ${buildScoreExplainer(today)}
@@ -989,22 +1015,22 @@ function buildMainHTML(loc, city, weekData) {
 
       <!-- Bottom stats row with progress fills -->
       <div class="score-stats-row">
-        <div class="stat-pill" style="--fill-pct:${today._cloudRaw}%" ${today._cloudRaw >= 20 && today._cloudRaw <= 40 ? 'data-optimal="true"' : today._cloudRaw > 70 ? 'data-bad="true"' : ''}>
+        <div class="stat-pill" style="--fill-pct:${today._cloudRaw}%;animation-delay:0ms" ${today._cloudRaw >= 20 && today._cloudRaw <= 40 ? 'data-optimal="true"' : today._cloudRaw > 70 ? 'data-bad="true"' : ''}>
           <svg width="13" height="13" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>
           <span>${today.cloud}</span>
           <span class="stat-lbl">עננות</span>
         </div>
-        <div class="stat-pill" style="--fill-pct:${today._humidityRaw}%" ${today._humidityRaw >= 40 && today._humidityRaw <= 60 ? 'data-optimal="true"' : today._humidityRaw > 80 ? 'data-bad="true"' : ''}>
+        <div class="stat-pill" style="--fill-pct:${today._humidityRaw}%;animation-delay:50ms" ${today._humidityRaw >= 40 && today._humidityRaw <= 60 ? 'data-optimal="true"' : today._humidityRaw > 80 ? 'data-bad="true"' : ''}>
           <svg width="13" height="13" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 4-7 13-7 13S5 13 5 9a7 7 0 0 1 7-7z"/></svg>
           <span>${today.humidity}</span>
           <span class="stat-lbl">לחות</span>
         </div>
-        <div class="stat-pill" style="--fill-pct:${Math.min(100, today._windRaw * 2.5)}%" ${today._windRaw < 10 ? 'data-optimal="true"' : today._windRaw > 30 ? 'data-bad="true"' : ''}>
+        <div class="stat-pill" style="--fill-pct:${Math.min(100, today._windRaw * 2.5)}%;animation-delay:100ms" ${today._windRaw < 10 ? 'data-optimal="true"' : today._windRaw > 30 ? 'data-bad="true"' : ''}>
           <svg width="13" height="13" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           <span>${today.wind}</span>
           <span class="stat-lbl">רוח</span>
         </div>
-        <div class="stat-pill" style="--fill-pct:${Math.min(100, (today._visibilityRaw / 30) * 100)}%" ${today._visibilityRaw >= 20 ? 'data-optimal="true"' : today._visibilityRaw < 5 ? 'data-bad="true"' : ''}>
+        <div class="stat-pill" style="--fill-pct:${Math.min(100, (today._visibilityRaw / 30) * 100)}%;animation-delay:150ms" ${today._visibilityRaw >= 20 ? 'data-optimal="true"' : today._visibilityRaw < 5 ? 'data-bad="true"' : ''}>
           <svg width="13" height="13" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="12" x2="16" y2="14"/></svg>
           <span>${today.visibility} ק״מ</span>
           <span class="stat-lbl">נראות</span>
@@ -1051,7 +1077,7 @@ function renderWeekBars(weekData) {
           <div style="position:absolute;top:0;left:0;width:20%;height:100%;background:linear-gradient(90deg,rgba(0,0,0,0.22) 0%,rgba(0,0,0,0) 100%)"></div>
           <div style="position:absolute;top:0;right:0;width:20%;height:100%;background:linear-gradient(270deg,rgba(0,0,0,0.22) 0%,rgba(0,0,0,0) 100%)"></div>
           <div style="position:absolute;top:0;left:10%;right:10%;height:45%;background:radial-gradient(ellipse 80% 100% at 50% 0%,rgba(255,255,255,0.30) 0%,rgba(255,255,255,0) 100%)"></div>
-          <span class="week-bar-score" style="position:relative;z-index:1;color:${scoreToSkyColor(ds, d.skyColors, getCardBgLuma())}">${ds.toFixed(1)}</span>
+          <span class="week-bar-score" style="position:relative;z-index:1;color:${scoreToSkyColor(ds, d.skyColors, getCardBgLuma())};background:rgba(10,4,0,0.30);border-radius:5px;padding:0 4px">${ds.toFixed(1)}</span>
         </div>
       </div>
       <div class="week-bar-day">${label}</div>
@@ -1297,9 +1323,7 @@ function attachMainEvents() {
 
   if (cityDisplay && searchBar) {
     cityDisplay.addEventListener('click', () => {
-      // Measure actual content height before opening so CSS transitions to exact size
-      // (avoids the max-height overshoot jank — see .location-search-bar in app.css)
-      searchBar.style.setProperty('--bar-open-height', searchBar.scrollHeight + 'px');
+      // CSS now uses max-height:200px — no JS measurement needed
       searchBar.classList.add('open');
       cityDisplay.style.visibility = 'hidden';
       searchInput?.focus();

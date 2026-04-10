@@ -31,17 +31,29 @@ export function scoreToSkyBg(score, skyColors) {
     rgb = hslToRgb(hue, sat, lit);
   }
 
-  // Boost saturation for visual impact on filled backgrounds
-  let hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  hsl.s = Math.max(hsl.s, 0.30 + t * 0.25);
-  // Darker lightness for backgrounds (text sits on top)
-  hsl.l = Math.max(0.15, Math.min(0.45, hsl.l * 0.7));
-  const base = hslToRgb(hsl.h, hsl.s, hsl.l);
-
-  // Lighter variant for gradient top
-  const light = hslToRgb(hsl.h, hsl.s * 0.9, Math.min(0.55, hsl.l + 0.12));
-  // Darker variant for gradient bottom
-  const dark = hslToRgb(hsl.h, hsl.s, Math.max(0.08, hsl.l - 0.10));
+  // Fixed score→hue palette — physics hue is NOT used for bar fills.
+  // Israeli golden-hour physics always yields H≈40° for every score, so
+  // every bar looks identical amber-brown. Instead: fixed two-zone palette:
+  //   Score  1–6.5  → steel-blue → purple  (poor/mediocre sky, cool feel)
+  //   Score  6.5–10 → amber → bright gold  (good/excellent, warm vivid)
+  // Clear visual contrast even when the full week clusters in one zone.
+  let h, s_bar, l_bar;
+  if (t < 0.61) {
+    // Poor → mediocre: blue (230°) → purple (270°)
+    const p = t / 0.61;
+    h     = 230 + p * 40;          // 230° → 270°
+    s_bar = 0.70 - p * 0.08;       // 0.70 → 0.62
+    l_bar = 0.37 + p * 0.01;       // 0.37 → 0.38
+  } else {
+    // Good → excellent: gold (40°) → brilliant orange-gold (28°)
+    const p = (t - 0.61) / 0.39;
+    h     = 40 - p * 12;           // 40° → 28°
+    s_bar = 0.85 + p * 0.10;       // 0.85 → 0.95
+    l_bar = 0.40 + p * 0.09;       // 0.40 → 0.49
+  }
+  const base  = hslToRgb(h, s_bar, l_bar);
+  const light = hslToRgb(h, s_bar * 0.85, Math.min(0.62, l_bar + 0.13));
+  const dark  = hslToRgb(h, s_bar,        Math.max(0.12, l_bar - 0.11));
 
   const hex = rgbToHex(base.r, base.g, base.b);
   return {
@@ -454,13 +466,13 @@ export function getSmartRecommendation(dayData) {
 //  Trend arrow (today vs tomorrow)
 // ─────────────────────────────────────────
 export function trendArrow(todayScore, tomorrowScore) {
-  if (tomorrowScore == null) return { arrow: '', label: '', css: '' };
+  if (tomorrowScore == null) return { arrow: '', label: '', css: '', dir: '' };
   const diff = tomorrowScore - todayScore;
-  if (diff >= 2)  return { arrow: '↑', label: 'מחר טוב יותר',   css: 'color:#7fd87f' };
-  if (diff >= 1)  return { arrow: '↗', label: 'שיפור קל מחר',   css: 'color:#b8d87f' };
-  if (diff <= -2) return { arrow: '↓', label: 'מחר פחות טוב',   css: 'color:#ff8888' };
-  if (diff <= -1) return { arrow: '↘', label: 'ירידה קלה מחר',  css: 'color:#d8a87f' };
-  return { arrow: '→', label: 'מחר דומה להיום', css: 'color:var(--cream-faint)' };
+  if (diff >= 2)  return { arrow: '↑', label: 'מחר טוב יותר',   css: 'color:#7fd87f', dir: 'up' };
+  if (diff >= 1)  return { arrow: '↗', label: 'שיפור קל מחר',   css: 'color:#b8d87f', dir: 'up' };
+  if (diff <= -2) return { arrow: '↓', label: 'מחר פחות טוב',   css: 'color:#ff8888', dir: 'down' };
+  if (diff <= -1) return { arrow: '↘', label: 'ירידה קלה מחר',  css: 'color:#d8a87f', dir: 'down' };
+  return { arrow: '→', label: 'מחר דומה להיום', css: 'color:var(--cream-faint)', dir: 'flat' };
 }
 
 // ─────────────────────────────────────────
@@ -524,6 +536,9 @@ export function buildGaugeArc(score, color, size = 120) {
   const endX   = cx + r;
   const displayScore = typeof score === 'number' ? score.toFixed(1) : score;
 
+  // Arc starts at 0 — the CSS arcDraw animation fades it in while a rAF
+  // in initMainScreen transitions stroke-dasharray to the real value.
+  const arcTarget = `${filled} ${gap}`;
   return `
     <svg width="${size}" height="${size / 2 + 18}" viewBox="0 0 ${size} ${size / 2 + 18}" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy}"
@@ -532,11 +547,12 @@ export function buildGaugeArc(score, color, size = 120) {
       <path class="gauge-arc-fill" d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy}"
             stroke="${color}" stroke-width="${strokeW}" fill="none"
             stroke-linecap="round"
-            stroke-dasharray="${filled} ${gap}"
-            style="filter:drop-shadow(0 0 6px ${color}66);transition:stroke-dasharray 0.6s ease" />
+            stroke-dasharray="0 ${totalArc}"
+            data-arc-target="${arcTarget}"
+            style="filter:drop-shadow(0 0 10px ${color}99) drop-shadow(0 0 4px ${color}55);transition:stroke-dasharray 1.1s cubic-bezier(0.22,1,0.36,1)" />
       <text class="gauge-score-text" x="${cx}" y="${cy - 8}" text-anchor="middle"
             font-family="var(--font-title)" font-size="32" font-weight="900"
-            fill="${color}" style="filter:drop-shadow(0 0 12px ${color}44)">
+            fill="${color}" style="filter:drop-shadow(0 0 18px ${color}BB) drop-shadow(0 0 6px ${color}66) drop-shadow(0 2px 4px rgba(0,0,0,0.65))">
         ${displayScore}
       </text>
       <text x="${cx}" y="${cy + 10}" text-anchor="middle"
