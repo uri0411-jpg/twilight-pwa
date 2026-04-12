@@ -5,37 +5,38 @@
 @import url('tokens.css');
 
 /* ─── TOKENS (alias bridge: old names → --twl-* tokens from tokens.css) ─── */
+/* Fallback values guard against tokens.css failing to load (e.g. SW cache miss) */
 :root {
   /* Colors */
-  --gold:          var(--twl-color-accent-primary);
-  --gold-light:    var(--twl-color-accent-primary-light);
-  --cream:         var(--twl-color-text-primary);
-  --cream-dim:     var(--twl-color-text-secondary);
-  --cream-faint:   var(--twl-color-text-tertiary);
-  --brown-dark:    var(--twl-color-neutral-850);
-  --brown-mid:     var(--twl-color-neutral-700);
-  --brown-btn:     var(--twl-color-interactive-button-bg);
-  --brown-light:   var(--twl-color-neutral-200);
-  --glass:         var(--twl-color-surface-glass);
-  --glass-border:  var(--twl-color-surface-glass-border);
+  --gold:          var(--twl-color-accent-primary,       #D4820A);
+  --gold-light:    var(--twl-color-accent-primary-light, #F0B84A);
+  --cream:         var(--twl-color-text-primary,         #F5E6C8);
+  --cream-dim:     var(--twl-color-text-secondary,       rgba(245,230,200,0.75));
+  --cream-faint:   var(--twl-color-text-tertiary,        rgba(245,230,200,0.45));
+  --brown-dark:    var(--twl-color-neutral-850,          #3B1F08);
+  --brown-mid:     var(--twl-color-neutral-700,          #6B3A0E);
+  --brown-btn:     var(--twl-color-interactive-button-bg,#5A2D0C);
+  --brown-light:   var(--twl-color-neutral-200,          #C49A6C);
+  --glass:         var(--twl-color-surface-glass,        rgba(20,10,4,0.55));
+  --glass-border:  var(--twl-color-surface-glass-border, rgba(212,165,116,0.18));
   /* Layout */
-  --r-card:        var(--twl-radius-card);
-  --r-pill:        var(--twl-radius-pill);
+  --r-card:        var(--twl-radius-card, 18px);
+  --r-pill:        var(--twl-radius-pill, 50px);
   /* Typography */
-  --font-title:    var(--twl-font-title);
-  --font-body:     var(--twl-font-body);
-  --font-spot:     var(--twl-font-spot);
+  --font-title:    var(--twl-font-title, 'Secular One', 'Rubik', sans-serif);
+  --font-body:     var(--twl-font-body,  'Rubik', 'Heebo', sans-serif);
+  --font-spot:     var(--twl-font-spot,  'Playfair Display', serif);
   /* Glass dynamics — updated by updateDynamicGradient() */
-  --glass-blur:     var(--twl-dynamic-glass-blur);
-  --glass-alpha:    var(--twl-dynamic-glass-alpha);
-  --glass-saturate: var(--twl-dynamic-glass-saturate);
+  --glass-blur:     var(--twl-dynamic-glass-blur,     8px);
+  --glass-alpha:    var(--twl-dynamic-glass-alpha,    0.57);
+  --glass-saturate: var(--twl-dynamic-glass-saturate, 120%);
   /* Score tier palette — updated dynamically by startLiveGradient() */
-  --score-high-color: var(--twl-color-score-high);
-  --score-high-glow:  var(--twl-color-score-high-glow);
-  --score-mid-color:  var(--twl-color-score-mid);
-  --score-mid-glow:   var(--twl-color-score-mid-glow);
-  --score-low-color:  var(--twl-color-score-low);
-  --score-low-glow:   var(--twl-color-score-low-glow);
+  --score-high-color: var(--twl-color-score-high,      #FFD060);
+  --score-high-glow:  var(--twl-color-score-high-glow, rgba(255,200,50,0.40));
+  --score-mid-color:  var(--twl-color-score-mid,       #FF8C30);
+  --score-mid-glow:   var(--twl-color-score-mid-glow,  rgba(255,120,30,0.30));
+  --score-low-color:  var(--twl-color-score-low,       #7090C8);
+  --score-low-glow:   var(--twl-color-score-low-glow,  rgba(80,100,200,0.20));
 }
 
 /* ── Accessibility: Reduced Motion ── */
