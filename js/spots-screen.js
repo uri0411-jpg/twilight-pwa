@@ -534,9 +534,10 @@ async function initLeafletMap() {
   if (!el) return;
   const lat = _loc?.lat || 32.0853, lon = _loc?.lon || 34.7818;
   _map = L.map('spots-map', { zoomControl: false }).setView([lat, lon], 11);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OSM',
-    maxZoom: 19
+  L.tileLayer('https://israelhiking.osm.org.il/Hebrew/Tiles/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://israelhiking.osm.org.il">Israel Hiking Map</a> | © OSM',
+    maxZoom: 19,
+    maxNativeZoom: 16
   }).addTo(_map);
   const userIcon = L.divIcon({
     html: '<div style="width:14px;height:14px;background:#F0B84A;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(240,184,74,0.9);animation:pulse 1.5s ease-in-out infinite"></div>',
