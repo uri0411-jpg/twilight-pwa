@@ -164,6 +164,18 @@ export function detectClimateProfile(lat) {
   return 'temperate';                           // polar/sub-polar → temperate fallback
 }
 
+/**
+ * Dynamic weather TTL — shorter near sunrise/sunset when conditions change fast,
+ * longer during stable midday/night periods.
+ * Returns TTL in minutes.
+ */
+export function getWeatherTTL() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour <= 9)   return 120;  // sunrise instability
+  if (hour >= 15 && hour <= 20) return 120;  // sunset window — most critical
+  return 240; // stable periods (midday, night)
+}
+
 export const ELEV_BONUS_THRESHOLD = 400;
 export const CALIBRATION_MIN_DAYS = 14;
 export const CALIBRATION_KEY = 'twl_calibration';

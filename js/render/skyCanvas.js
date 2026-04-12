@@ -209,6 +209,21 @@ function boostSaturation({ r, g, b }, targetS = 0.70) {
 export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp = 0, beltOfVenus = 0, clouds, mieGrowth = 1) {
   if (!container) return;
 
+  // ── First Frame Freeze ────────────────────────────────────────────────────
+  // Skip rendering entirely if the sky mask isn't ready yet. Without the mask
+  // the gradient would paint across the ENTIRE viewport (including mountains,
+  // trees) and clip on the next frame — causing a visible flash.
+  //
+  // The graded render barrier in initMainScreen pre-loads the mask before
+  // startLiveGradient fires, so this guard is a safety net for the race
+  // where the 300ms soft timeout expired before the mask was ready.
+  // The next 30-second update() cycle will have the mask and render normally.
+  if (!getSkyMaskSync()) {
+    // Ensure mask load is in-flight (idempotent — loadSkyMask caches its promise)
+    loadSkyMask().catch(err => console.warn('[skyCanvas] mask load failed', err));
+    return;
+  }
+
   // #sky-layers is position:fixed inset:0, so its size matches the viewport.
   const w = container.offsetWidth  || window.innerWidth;
   const h = container.offsetHeight || window.innerHeight;
@@ -229,11 +244,6 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
       display:       'block',
     });
     container.insertBefore(canvas, container.firstChild);
-
-    // Kick off async mask load on first canvas creation. It will self-
-    // cache; the next renderSkyCanvas call after it resolves will see
-    // getSkyMaskSync() return the mask and clip to it.
-    loadSkyMask().catch(err => console.warn('[skyCanvas] mask load failed', err));
   }
 
   // Resize if needed
@@ -332,17 +342,12 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
   ctx.fillRect(0, 0, w, h);
 
   // ── Clip to sky mask ──────────────────────────────────────────────────────
-  // If the mask has loaded, cut the gradient down to only the sky pixels of
-  // background.jpg. destination-in keeps the gradient only where the mask
-  // alpha is non-zero, scaled with mask alpha.  Before the mask loads we
-  // leave the gradient un-clipped — a harmless first-frame flash while the
-  // image decodes, typically <50ms.
-  const mask = getSkyMaskSync();
-  if (mask) {
-    ctx.globalCompositeOperation = 'destination-in';
-    drawSkyMask(ctx, w, h);
-    ctx.globalCompositeOperation = 'source-over';
-  }
+  // Cut the gradient down to only the sky pixels of background.jpg.
+  // destination-in keeps the gradient only where the mask alpha is non-zero.
+  // The First Frame Freeze guard at the top guarantees the mask is ready here.
+  ctx.globalCompositeOperation = 'destination-in';
+  drawSkyMask(ctx, w, h);
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 /**

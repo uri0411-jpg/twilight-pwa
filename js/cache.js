@@ -131,4 +131,101 @@ export function getStaleCacheWithAge(key) {
   } catch { return null; }
 }
 
+// ─────────────────────────────────────────
+//  Inflight request deduplication
+//  Prevents duplicate concurrent fetches for the same cache key.
+// ─────────────────────────────────────────
+const _inflight = new Map();
+
+/**
+ * Deduplicate concurrent fetches: if a request for `key` is already in-flight,
+ * returns the same promise instead of firing a second network call.
+ */
+export function fetchWithDedup(key, fetcher) {
+  if (_inflight.has(key)) return _inflight.get(key);
+  const promise = fetcher().finally(() => _inflight.delete(key));
+  _inflight.set(key, promise);
+  return promise;
+}
+
+// ─────────────────────────────────────────
+//  Pub/Sub — SWR → UI reactivity
+//  Subscribers are notified when background revalidation writes fresh data.
+// ─────────────────────────────────────────
+const _listeners = new Map();
+
+/**
+ * Subscribe to cache updates for a given key.
+ * @returns {Function} unsubscribe
+ */
+export function subscribe(key, cb) {
+  if (!_listeners.has(key)) _listeners.set(key, new Set());
+  _listeners.get(key).add(cb);
+  return () => _listeners.get(key)?.delete(cb);
+}
+
+function notify(key, data) {
+  const cbs = _listeners.get(key);
+  if (cbs) cbs.forEach(cb => { try { cb(data); } catch (e) { console.warn('[cache] subscriber error:', e); } });
+}
+
+// ─────────────────────────────────────────
+//  Stale-While-Revalidate (SWR) primitive
+//  Always returns cached data immediately (even if stale), and
+//  triggers a background revalidation when the entry has expired.
+//
+//  Returns a descriptor { data, isStale, revalidatePromise }.
+//  Callers MUST wrap result.data in Promise.resolve() for consistent async API.
+// ─────────────────────────────────────────
+
+/**
+ * @param {string}   key      Cache key (without prefix)
+ * @param {Function} fetcher  Async function that returns fresh data
+ * @param {number}   ttlMin   TTL in minutes for the new cache entry
+ * @returns {{ data: any|null, isStale: boolean, revalidatePromise: Promise|null }}
+ */
+export function swr(key, fetcher, ttlMin) {
+  const entry = getStaleCacheWithAge(key);
+
+  if (entry?.data && !entry.isExpired) {
+    // Fresh cache — serve directly, no revalidation
+    return { data: entry.data, isStale: false, revalidatePromise: null };
+  }
+
+  if (entry?.data && entry.isExpired) {
+    // Stale cache — serve immediately, revalidate in background
+    const revalidatePromise = fetchWithDedup(key, async () => {
+      const fresh = await fetcher();
+      setCache(key, fresh, ttlMin);
+      notify(key, fresh);
+      return fresh;
+    });
+    return { data: entry.data, isStale: true, revalidatePromise };
+  }
+
+  // No cache at all — must fetch
+  return {
+    data: null,
+    isStale: false,
+    revalidatePromise: fetchWithDedup(key, async () => {
+      const fresh = await fetcher();
+      setCache(key, fresh, ttlMin);
+      notify(key, fresh);
+      return fresh;
+    }),
+  };
+}
+
+// ─────────────────────────────────────────
+//  Zone cache freshness check
+// ─────────────────────────────────────────
+
+/**
+ * Returns true if zone weather data exists and is not expired.
+ */
+export function isZoneCacheFresh(zoneId) {
+  const key = `weather_zone_${zoneId}`;
+  return getCacheAge(key) !== null;
+}
+
 // ✓ cache.js — complete

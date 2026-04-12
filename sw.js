@@ -44,6 +44,7 @@ const STATIC_ASSETS = [
   './js/calibration.js',
   './js/install-prompt.js',
   './js/notifications.js',
+  './js/zones.js',
   // Pulse 1-4 additions
   './js/debugPanel.js',
   './js/engine/physicsLayer.js',

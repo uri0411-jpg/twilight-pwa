@@ -4,9 +4,10 @@
 //                Nominatim, Overpass
 // ═══════════════════════════════════════════
 
-import { OPEN_METEO_URL, OPEN_METEO_AQ_URL, NOMINATIM_URL, OVERPASS_URL, OVERPASS_FALLBACK_URL, CACHE_TTL } from './config.js';
-import { setCache, getCache, getStaleCache } from './cache.js';
+import { OPEN_METEO_URL, OPEN_METEO_AQ_URL, NOMINATIM_URL, OVERPASS_URL, OVERPASS_FALLBACK_URL, CACHE_TTL, getWeatherTTL } from './config.js';
+import { setCache, getCache, getStaleCache, swr, fetchWithDedup } from './cache.js';
 import { distKm } from './utils.js';
+import { getZoneForCoord } from './zones.js';
 
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_TIMEOUT_SECONDARY_MS = 8000;
@@ -79,23 +80,59 @@ function averageHourlyArrays(datasets, key) {
 }
 
 /**
- * Fast weather fetch — primary model only (best_match).
- * Used for initial render; ensemble refinement runs in background.
+ * Fast weather fetch — primary model only (best_match), zone-aware SWR.
+ *
+ * Always returns a Promise (never mixed sync/async).
+ * - Warm boot (fresh cache): resolves instantly, 0 API calls.
+ * - Stale boot: resolves instantly with stale data; background revalidation
+ *   notifies subscribers via cache pub/sub when fresh data arrives.
+ * - Cold boot (no cache): awaits network fetch.
+ * - Force (manual refresh): always bypasses cache.
+ *
+ * @param {number}  lat
+ * @param {number}  lon
+ * @param {boolean} force  Bypass cache (manual refresh)
+ * @returns {Promise<Object>}  Weather data (always a Promise)
  */
 export async function fetchWeekFast(lat, lon, force = false) {
-  const cacheKey = `weather_${lat.toFixed(3)}_${lon.toFixed(3)}`;
-  const cached = getCache(cacheKey);
-  if (cached && !force) return cached;
+  const zone = getZoneForCoord(lat, lon);
+  const key  = `weather_zone_${zone.zoneId}`;
+  const ttl  = getWeatherTTL();
 
+  if (force) {
+    return fetchWithDedup(key, async () => {
+      const data = await fetchModel(zone.repLat, zone.repLon);
+      data._modelCount = 1;
+      setCache(key, data, ttl);
+      return data;
+    });
+  }
+
+  const result = swr(key, async () => {
+    const data = await fetchModel(zone.repLat, zone.repLon);
+    data._modelCount = 1;
+    return data;
+  }, ttl);
+
+  if (result.data) {
+    // Cache hit (fresh or stale) — always return as Promise.
+    // If stale, background revalidation is in-flight and will notify subscribers.
+    if (result.isStale) {
+      result.data._isStale = true;
+      console.log(`[api] fetchWeekFast: serving stale zone ${zone.zoneId}, revalidating in background`);
+    }
+    return Promise.resolve(result.data);
+  }
+
+  // No cache — must await
   try {
-    const primary = await fetchModel(lat, lon);
-    primary._modelCount = 1;
-    setCache(cacheKey, primary, CACHE_TTL.weather);
-    return primary;
+    return await result.revalidatePromise;
   } catch (err) {
-    const stale = getStaleCache(cacheKey);
+    // Network failed and no cache at all — check old per-coord key as last resort
+    const legacyKey = `weather_${lat.toFixed(3)}_${lon.toFixed(3)}`;
+    const stale = getStaleCache(legacyKey);
     if (stale) {
-      console.warn('[api] fetchWeekFast: primary failed, using stale cache');
+      console.warn('[api] fetchWeekFast: zone fetch failed, using legacy stale cache');
       stale._isStale = true;
       return stale;
     }
@@ -106,38 +143,50 @@ export async function fetchWeekFast(lat, lon, force = false) {
 /**
  * Background ensemble refinement — fetches ECMWF + GFS, averages with primary,
  * updates cache, and returns the refined data.
- * Returns null if refinement adds nothing (both secondaries failed or matched primary).
+ * Zone-aware: uses zone representative coordinates for API calls.
+ * Returns null if primary came from cache (wasFreshFetch=false) or both secondaries failed.
+ *
+ * @param {number}  lat            User's latitude (for zone lookup)
+ * @param {number}  lon            User's longitude (for zone lookup)
+ * @param {Object}  primaryData    Primary model data
+ * @param {boolean} wasFreshFetch  True if primary was actually fetched (not from cache)
  */
-export async function fetchWeekEnsemble(lat, lon, primaryData) {
+export async function fetchWeekEnsemble(lat, lon, primaryData, wasFreshFetch = true) {
   if (!primaryData?.hourly) return null;
+  if (!wasFreshFetch) return null; // Primary came from cache — no point re-averaging
 
-  const [ecmwfResult, gfsResult] = await Promise.allSettled([
-    fetchModel(lat, lon, 'ecmwf_ifs025'),
-    fetchModel(lat, lon, 'gfs_seamless')
-  ]);
+  const zone = getZoneForCoord(lat, lon);
+  const key  = `ensemble_zone_${zone.zoneId}`;
 
-  const ecmwfData = ecmwfResult.status === 'fulfilled' ? ecmwfResult.value : primaryData;
-  const gfsData   = gfsResult.status   === 'fulfilled' ? gfsResult.value   : primaryData;
-  const datasets  = [primaryData, ecmwfData, gfsData];
-  const realCount = new Set(datasets).size;
+  return fetchWithDedup(key, async () => {
+    const [ecmwfResult, gfsResult] = await Promise.allSettled([
+      fetchModel(zone.repLat, zone.repLon, 'ecmwf_ifs025'),
+      fetchModel(zone.repLat, zone.repLon, 'gfs_seamless')
+    ]);
 
-  if (realCount <= 1) {
-    console.log('[api] Ensemble: no secondary models available, skipping refinement');
-    return null;
-  }
+    const ecmwfData = ecmwfResult.status === 'fulfilled' ? ecmwfResult.value : primaryData;
+    const gfsData   = gfsResult.status   === 'fulfilled' ? gfsResult.value   : primaryData;
+    const datasets  = [primaryData, ecmwfData, gfsData];
+    const realCount = new Set(datasets).size;
 
-  // Deep-clone primary to avoid mutating the already-rendered data
-  const refined = JSON.parse(JSON.stringify(primaryData));
-  const hourlyKeys = Object.keys(refined.hourly).filter(k => k !== 'time');
-  for (const key of hourlyKeys) {
-    refined.hourly[key] = averageHourlyArrays(datasets, key);
-  }
-  refined._modelCount = realCount;
+    if (realCount <= 1) {
+      console.log('[api] Ensemble: no secondary models available, skipping refinement');
+      return null;
+    }
 
-  console.log(`[api] Ensemble: ${realCount} unique model(s) → averaging 3 slots`);
-  const cacheKey = `weather_${lat.toFixed(3)}_${lon.toFixed(3)}`;
-  setCache(cacheKey, refined, CACHE_TTL.weather);
-  return refined;
+    // Deep-clone primary to avoid mutating the already-rendered data
+    const refined = JSON.parse(JSON.stringify(primaryData));
+    const hourlyKeys = Object.keys(refined.hourly).filter(k => k !== 'time');
+    for (const hk of hourlyKeys) {
+      refined.hourly[hk] = averageHourlyArrays(datasets, hk);
+    }
+    refined._modelCount = realCount;
+
+    console.log(`[api] Ensemble: ${realCount} unique model(s) → averaging 3 slots (zone: ${zone.zoneId})`);
+    const cacheKey = `weather_zone_${zone.zoneId}`;
+    setCache(cacheKey, refined, getWeatherTTL());
+    return refined;
+  });
 }
 
 /**
@@ -147,35 +196,56 @@ export async function fetchWeekEnsemble(lat, lon, primaryData) {
 export async function fetchWeek(lat, lon, force = false) {
   const primary = await fetchWeekFast(lat, lon, force);
   if (primary._isStale) return primary; // offline — skip ensemble
-  const refined = await fetchWeekEnsemble(lat, lon, primary);
+  const refined = await fetchWeekEnsemble(lat, lon, primary, true);
   return refined || primary;
 }
 
 /**
  * Fetch air quality data (dust, PM2.5, PM10, aerosol optical depth)
- * Open-Meteo Air Quality API — free, no key
+ * Zone-aware SWR — always returns a Promise.
  */
 export async function fetchAirQuality(lat, lon, force = false) {
-  const cacheKey = `airq_${lat.toFixed(3)}_${lon.toFixed(3)}`;
-  const cached = getCache(cacheKey);
-  if (cached && !force) return cached;
+  const zone = getZoneForCoord(lat, lon);
+  const key  = `airq_zone_${zone.zoneId}`;
+  const ttl  = getWeatherTTL();
 
+  if (force) {
+    return fetchWithDedup(key, async () => {
+      const data = await _fetchAirQualityRaw(zone.repLat, zone.repLon);
+      if (data) setCache(key, data, ttl);
+      return data;
+    });
+  }
+
+  const result = swr(key, async () => {
+    return _fetchAirQualityRaw(zone.repLat, zone.repLon);
+  }, ttl);
+
+  if (result.data) return Promise.resolve(result.data);
+
+  try {
+    return await result.revalidatePromise;
+  } catch {
+    return null; // non-critical
+  }
+}
+
+/** Raw AQ fetch — no caching logic, just the API call */
+async function _fetchAirQualityRaw(lat, lon) {
   const params = new URLSearchParams({
     latitude: lat, longitude: lon,
     timezone: 'Asia/Jerusalem',
     forecast_days: 5,
-    hourly: 'dust,pm2_5,pm10,aerosol_optical_depth,ozone'  // A1: ozone for photochemical smog detection
+    hourly: 'dust,pm2_5,pm10,aerosol_optical_depth,ozone'
   });
 
   try {
     const res = await fetchWithTimeout(`${OPEN_METEO_AQ_URL}?${params}`, {}, FETCH_TIMEOUT_SECONDARY_MS);
     if (!res.ok) throw new Error(`AQ API error ${res.status}`);
-    const data = await res.json();
-    setCache(cacheKey, data, CACHE_TTL.airq);
-    return data;
+    return await res.json();
   } catch (e) {
     console.warn('[api] Air quality fetch failed:', e.message);
-    return null;  // non-critical — scoring works without it
+    return null;
   }
 }
 
@@ -299,30 +369,45 @@ export async function fetchSpots(lat, lon, radiusKm = 25) {
 
 /**
  * A2: Fetch cloud cover for the western horizon (~50km west)
- * Used to detect low clouds blocking the sunset light path.
- * Same Open-Meteo API, no auth, fetched in parallel with fetchWeek.
+ * Zone-aware SWR — uses zone representative point shifted 0.5° west.
  */
 export async function fetchWesternHorizon(lat, lon, force = false) {
-  const lonWest = Math.max(-180, lon - 0.5); // ~44km west at lat 32°
-  const cacheKey = `west_${lat.toFixed(3)}_${lonWest.toFixed(3)}`;
-  const cached = getCache(cacheKey);
-  if (cached && !force) return cached;
+  const zone = getZoneForCoord(lat, lon);
+  const key  = `west_zone_${zone.zoneId}`;
+  const ttl  = getWeatherTTL();
 
-  const params = new URLSearchParams({
-    latitude: lat, longitude: lonWest,
-    timezone: 'Asia/Jerusalem', forecast_days: 7,
-    hourly: 'cloudcover_low,cloudcover'
-  });
+  const fetcher = async () => {
+    const lonWest = Math.max(-180, zone.repLon - 0.5);
+    const params = new URLSearchParams({
+      latitude: zone.repLat, longitude: lonWest,
+      timezone: 'Asia/Jerusalem', forecast_days: 7,
+      hourly: 'cloudcover_low,cloudcover'
+    });
+    try {
+      const res = await fetchWithTimeout(`${OPEN_METEO_URL}?${params}`, {}, FETCH_TIMEOUT_SECONDARY_MS);
+      if (!res.ok) throw new Error(`Western horizon API error ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.warn('[api] Western horizon fetch failed:', e.message);
+      return null;
+    }
+  };
+
+  if (force) {
+    return fetchWithDedup(key, async () => {
+      const data = await fetcher();
+      if (data) setCache(key, data, ttl);
+      return data;
+    });
+  }
+
+  const result = swr(key, fetcher, ttl);
+  if (result.data) return Promise.resolve(result.data);
 
   try {
-    const res = await fetchWithTimeout(`${OPEN_METEO_URL}?${params}`, {}, FETCH_TIMEOUT_SECONDARY_MS);
-    if (!res.ok) throw new Error(`Western horizon API error ${res.status}`);
-    const data = await res.json();
-    setCache(cacheKey, data, CACHE_TTL.weather);
-    return data;
-  } catch (e) {
-    console.warn('[api] Western horizon fetch failed:', e.message);
-    return null; // non-critical — scoring works without it
+    return await result.revalidatePromise;
+  } catch {
+    return null; // non-critical
   }
 }
 

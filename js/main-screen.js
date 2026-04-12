@@ -17,6 +17,27 @@ import { renderSunDisk, removeSunDisk } from './render/sunDisk.js';
 import { renderCrepuscularRays, removeCrepuscularRays } from './render/crepuscularRays.js';
 import { renderSkyCanvas, removeSkyCanvas } from './render/skyCanvas.js';
 import { renderNightSky, removeNightSky } from './render/nightSky.js';
+import { loadSkyMask } from './render/skyMask.js';
+
+// ─────────────────────────────────────────
+//  Background decode gate — ensures background.jpg is decoded in GPU
+//  memory before the sky canvas starts blending on top of it.
+//  Resolves immediately from SW cache on repeat visits; max 500ms on
+//  first visit / slow network.
+// ─────────────────────────────────────────
+let _bgReady = null;
+
+function ensureBackgroundReady() {
+  if (_bgReady) return _bgReady;
+  _bgReady = new Promise(resolve => {
+    const img = new Image();
+    img.src = './images/background.jpg';
+    if (img.complete && img.naturalWidth > 0) { resolve(); return; }
+    img.decode().then(resolve).catch(resolve);
+    setTimeout(resolve, 500); // never block > 500ms
+  });
+  return _bgReady;
+}
 
 let _weekData = [];
 let _city = '';
@@ -418,6 +439,18 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
 
   attachMainEvents();
   startCountdown(weekData[0]);
+
+  // ── GRADED RENDER BARRIER ──
+  // Wait for background.jpg decode + sky mask computation before starting
+  // the live gradient. Soft timeout (300ms) prevents blocking on slow networks;
+  // First Frame Freeze in skyCanvas.js acts as safety net if timeout fires early.
+  const bgPromise   = ensureBackgroundReady();
+  const maskPromise = loadSkyMask().catch(() => null);
+
+  await Promise.race([
+    Promise.all([bgPromise, maskPromise]),
+    new Promise(resolve => setTimeout(resolve, 300)),
+  ]);
 
   const today = weekData[0];
   if (today) {

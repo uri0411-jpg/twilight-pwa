@@ -13,13 +13,14 @@ import { initSettingsScreen }                  from './settings-screen.js';
 import { initLearningScreen }                  from './learning-screen.js';
 import { showToast, showLoading }              from './ui.js';
 import { registerSW }                          from './sw-register.js';
-import { clearExpired, getCacheAge, getStaleCacheWithAge } from './cache.js';
+import { clearExpired, getCacheAge, getStaleCacheWithAge, subscribe, isZoneCacheFresh } from './cache.js';
 import { recordPrediction, fetchActualForDate, getUnfilledDates, processLearningForEntry } from './calibration.js';
 import { seedFromBacktest, getLearningStats, pinLearningSnapshot }  from './engine/learningEngine.js';
 import { initInstallPrompt }                   from './install-prompt.js';
 import { rearmSavedAlerts }                    from './notifications.js';
 import { initOnboarding }                      from './onboarding.js';
 import { scoreToLabel } from './utils.js';
+import { getZoneForCoord } from './zones.js';
 
 // ─────────────────────────────────────────
 //  Score EMA — smooth scores across page loads to reduce noise from
@@ -99,12 +100,9 @@ let _locGen              = 0;    // monotonic counter — guards stale async cal
 //  Boot
 // ─────────────────────────────────────────
 async function boot() {
-  // Detect stale session: if page reloads >5 min after last boot, force-refresh
-  // weather data instead of serving from localStorage cache. Closes the gap
-  // between pull-to-refresh (plain reload) and button refresh (force=true).
-  const lastBoot = Number(sessionStorage.getItem('twl_boot_time')) || 0;
-  const _isStaleSession = Date.now() - lastBoot > 5 * 60 * 1000;
-  sessionStorage.setItem('twl_boot_time', String(Date.now()));
+  // SWR handles data freshness — no need for session-based forced refresh.
+  // Zone-aware cache with dynamic TTL ensures data is revalidated at the
+  // right frequency (2-4h, shorter near sunrise/sunset).
 
   registerSW();
   window.addEventListener('twilight:updateReady', () => {
@@ -143,7 +141,7 @@ async function boot() {
   window.addEventListener('twilight:setLocation', handleSetLocation);
 
   try {
-    await Promise.race([loadAppData(_isStaleSession), bootTimeout]);
+    await Promise.race([loadAppData(), bootTimeout]);
   } catch (err) {
     console.error('[boot] Failed:', err);
     showToast('שגיאה בטעינת נתונים — לחץ לנסות שוב', 'error');
@@ -225,7 +223,9 @@ async function autoSeedIfNeeded() {
   }
 }
 
-async function loadAppData(forceRefresh = false) {
+let _unsubWeather = null; // cleanup for SWR weather subscription
+
+async function loadAppData() {
   const saved = loadLocation();
   if (saved) {
     _loc  = saved;
@@ -254,37 +254,33 @@ async function loadAppData(forceRefresh = false) {
   _locGen++;
   const gen = _locGen;
 
-  // On stale reload, clear EMA pin so fresh scores aren't smoothed with old data
-  if (forceRefresh) {
-    const pinKey = `${_SCORE_PIN_KEY}_${_loc.lat.toFixed(2)}_${_loc.lon.toFixed(2)}`;
-    localStorage.removeItem(pinKey);
-  }
-
-  // ── SWR: instant render from stale cache if available ──
-  const wCacheKey = `weather_${_loc.lat.toFixed(3)}_${_loc.lon.toFixed(3)}`;
-  const staleEntry = !forceRefresh ? getStaleCacheWithAge(wCacheKey) : null;
-  if (staleEntry?.data && staleEntry.isExpired) {
-    // Render immediately with stale data while fresh data loads in background
-    const staleWeather = staleEntry.data;
-    pinLearningSnapshot();
-    _weekData = calcWeekData(staleWeather, null, _loc.lat, _loc.lon, null);
-    await initMainScreen(_loc, _city, _weekData, null);
-    showLoading(false);
-    const ageH = staleEntry.ageMinutes != null ? Math.round(staleEntry.ageMinutes / 60) : null;
-    if (ageH && ageH > 6) {
-      showToast(`מציג נתונים מלפני ${ageH} שעות — מעדכן…`, 'info');
-    }
-  }
+  // ── Subscribe to SWR background revalidation ──
+  // When fetchWeekFast returns stale data, the SWR layer fetches fresh data
+  // in the background. This subscription auto-updates the UI when it arrives.
+  if (_unsubWeather) _unsubWeather(); // clean up previous subscription
+  const zone = getZoneForCoord(_loc.lat, _loc.lon);
+  _unsubWeather = subscribe(`weather_zone_${zone.zoneId}`, (freshWeather) => {
+    if (gen !== _locGen) return; // guard stale callbacks
+    const locSnap = { lat: _loc.lat, lon: _loc.lon };
+    _weekData = _applyScoreEMA(
+      calcWeekData(freshWeather, _airQuality, locSnap.lat, locSnap.lon, null),
+      locSnap
+    );
+    refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+    console.log('[swr] background revalidation → UI updated');
+  });
 
   // ── Start seed + all fetches concurrently ──
+  // fetchWeekFast uses zone-aware SWR: returns cache instantly if available,
+  // revalidates in background if stale (subscribers notified automatically).
   const seedPromise    = autoSeedIfNeeded();
-  const weatherPromise = fetchWeekFast(_loc.lat, _loc.lon, forceRefresh);
-  const aqPromise      = fetchAirQuality(_loc.lat, _loc.lon, forceRefresh).catch(() => null);
-  const westPromise    = fetchWesternHorizon(_loc.lat, _loc.lon, forceRefresh).catch(() => null);
+  const weatherPromise = fetchWeekFast(_loc.lat, _loc.lon);
+  const aqPromise      = fetchAirQuality(_loc.lat, _loc.lon).catch(() => null);
+  const westPromise    = fetchWesternHorizon(_loc.lat, _loc.lon).catch(() => null);
 
   // Wait for seed before pinning learning snapshot
   await seedPromise;
-  if (!staleEntry?.isExpired) pinLearningSnapshot();
+  pinLearningSnapshot();
 
   // ── Phase 1: Render with primary weather model ──
   const weather = await weatherPromise;
@@ -309,8 +305,12 @@ async function loadAppData(forceRefresh = false) {
   const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
   // ── Phase 3: Background ensemble refinement ──
-  if (!weather._isStale) {
-    fetchWeekEnsemble(locSnapshot.lat, locSnapshot.lon, weather).then(async refined => {
+  // Only runs if weather was actually fetched fresh (not from cache).
+  // The SWR subscription above handles the case where stale data was served
+  // and fresh data arrives later.
+  const wasFreshFetch = !weather._isStale && weather._modelCount === 1;
+  if (wasFreshFetch) {
+    fetchWeekEnsemble(locSnapshot.lat, locSnapshot.lon, weather, true).then(async refined => {
       if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
         calcWeekData(refined, airQ, locSnapshot.lat, locSnapshot.lon, westData),
@@ -320,7 +320,7 @@ async function loadAppData(forceRefresh = false) {
       refreshMainScores(_weekData, freshSpotScores);
       console.log(`[boot] ensemble refinement applied (${refined._modelCount} models)`);
     }).catch(err => console.warn('[boot] ensemble refinement failed:', err.message));
-  } else {
+  } else if (weather._isStale) {
     // Offline — apply EMA to whatever we have
     _weekData = _applyScoreEMA(_weekData, _loc);
   }
@@ -416,8 +416,8 @@ async function handleRefresh(e) {
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
-    // Background ensemble refinement
-    fetchWeekEnsemble(lat, lon, weather).then(refined => {
+    // Background ensemble refinement (force=true → always a fresh fetch)
+    fetchWeekEnsemble(lat, lon, weather, true).then(refined => {
       if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
         calcWeekData(refined, airQ, lat, lon, westData),
@@ -499,8 +499,8 @@ async function handleSetLocation(e) {
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
-    // Background ensemble refinement
-    fetchWeekEnsemble(lat, lon, weather).then(refined => {
+    // Background ensemble refinement (location change → always a fresh fetch)
+    fetchWeekEnsemble(lat, lon, weather, true).then(refined => {
       if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
         calcWeekData(refined, airQ, lat, lon, westData),
@@ -536,8 +536,9 @@ async function handleSetLocation(e) {
 }
 
 // ─────────────────────────────────────────
-//  Single visibility handler
-//  FIX: merged two separate listeners into one
+//  Visibility handler — zone-aware
+//  Only refreshes if the zone's cached weather data has actually expired.
+//  Eliminates unnecessary API calls when returning from background.
 // ─────────────────────────────────────────
 let _lastVisible = Date.now();
 
@@ -545,10 +546,12 @@ function handleVisibilityChange() {
   if (document.hidden) {
     _lastVisible = Date.now();
   } else {
-    const elapsed = Date.now() - _lastVisible;
-    if (elapsed > 30 * 60 * 1000) {
+    const zone = _loc ? getZoneForCoord(_loc.lat, _loc.lon) : null;
+    if (zone && !isZoneCacheFresh(zone.zoneId)) {
+      // Zone data expired — refresh
       handleRefresh();
     } else {
+      // Zone data still fresh — just sync location state
       syncLocationFromState();
     }
   }
