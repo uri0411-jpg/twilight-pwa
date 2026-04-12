@@ -227,6 +227,7 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
   // #sky-layers is position:fixed inset:0, so its size matches the viewport.
   const w = container.offsetWidth  || window.innerWidth;
   const h = container.offsetHeight || window.innerHeight;
+  if (!w || !h) return; // skip frame if container has no layout yet
 
   // ── Find or create canvas ─────────────────────────────────────────────────
   let canvas = container.querySelector(`#${CANVAS_ID}`);

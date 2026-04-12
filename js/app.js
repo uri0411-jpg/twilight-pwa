@@ -225,7 +225,29 @@ async function autoSeedIfNeeded() {
 
 let _unsubWeather = null; // cleanup for SWR weather subscription
 
+/**
+ * Rewire the SWR zone subscription when location changes.
+ * Unsubscribes from the old zone and subscribes to the new one.
+ * Called from loadAppData, handleSetLocation, and handleRefresh.
+ */
+function _rewireZoneSubscription(lat, lon, gen) {
+  if (_unsubWeather) _unsubWeather();
+  const zone = getZoneForCoord(lat, lon);
+  _unsubWeather = subscribe(`weather_zone_${zone.zoneId}`, (freshWeather) => {
+    if (gen !== _locGen) return;
+    const locSnap = { lat, lon };
+    _weekData = _applyScoreEMA(
+      calcWeekData(freshWeather, _airQuality, locSnap.lat, locSnap.lon, null),
+      locSnap
+    );
+    refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+    console.log('[swr] background revalidation → UI updated');
+  });
+}
+
 async function loadAppData() {
+  _isRefreshing = true; // prevent concurrent handleSetLocation during boot
+  try {
   const saved = loadLocation();
   if (saved) {
     _loc  = saved;
@@ -250,33 +272,23 @@ async function loadAppData() {
     });
   }
 
-  // Capture location generation — stale async callbacks will check this
+  // Capture location generation + immutable coordinate snapshot.
+  // All awaits below may yield to handleSetLocation which mutates _loc,
+  // so we must use locSnap for all calculations, not the live _loc reference.
   _locGen++;
   const gen = _locGen;
+  const locSnap = { lat: _loc.lat, lon: _loc.lon };
 
   // ── Subscribe to SWR background revalidation ──
-  // When fetchWeekFast returns stale data, the SWR layer fetches fresh data
-  // in the background. This subscription auto-updates the UI when it arrives.
-  if (_unsubWeather) _unsubWeather(); // clean up previous subscription
-  const zone = getZoneForCoord(_loc.lat, _loc.lon);
-  _unsubWeather = subscribe(`weather_zone_${zone.zoneId}`, (freshWeather) => {
-    if (gen !== _locGen) return; // guard stale callbacks
-    const locSnap = { lat: _loc.lat, lon: _loc.lon };
-    _weekData = _applyScoreEMA(
-      calcWeekData(freshWeather, _airQuality, locSnap.lat, locSnap.lon, null),
-      locSnap
-    );
-    refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
-    console.log('[swr] background revalidation → UI updated');
-  });
+  _rewireZoneSubscription(locSnap.lat, locSnap.lon, gen);
 
   // ── Start seed + all fetches concurrently ──
   // fetchWeekFast uses zone-aware SWR: returns cache instantly if available,
   // revalidates in background if stale (subscribers notified automatically).
   const seedPromise    = autoSeedIfNeeded();
-  const weatherPromise = fetchWeekFast(_loc.lat, _loc.lon);
-  const aqPromise      = fetchAirQuality(_loc.lat, _loc.lon).catch(() => null);
-  const westPromise    = fetchWesternHorizon(_loc.lat, _loc.lon).catch(() => null);
+  const weatherPromise = fetchWeekFast(locSnap.lat, locSnap.lon);
+  const aqPromise      = fetchAirQuality(locSnap.lat, locSnap.lon).catch(() => null);
+  const westPromise    = fetchWesternHorizon(locSnap.lat, locSnap.lon).catch(() => null);
 
   // Wait for seed before pinning learning snapshot
   await seedPromise;
@@ -284,8 +296,9 @@ async function loadAppData() {
 
   // ── Phase 1: Render with primary weather model ──
   const weather = await weatherPromise;
-  _weekData = calcWeekData(weather, null, _loc.lat, _loc.lon, null);
-  await initMainScreen(_loc, _city, _weekData, null);
+  if (gen !== _locGen) return; // location changed during await — abort
+  _weekData = calcWeekData(weather, null, locSnap.lat, locSnap.lon, null);
+  await initMainScreen({ lat: locSnap.lat, lon: locSnap.lon }, _city, _weekData, null);
 
   // Stale-data / offline banner
   if (weather._isStale) {
@@ -298,9 +311,8 @@ async function loadAppData() {
   _airQuality = airQ;
 
   // Recalculate only if we got additional data
-  const locSnapshot = { lat: _loc.lat, lon: _loc.lon };
   if (airQ || westData) {
-    _weekData = calcWeekData(weather, airQ, locSnapshot.lat, locSnapshot.lon, westData);
+    _weekData = calcWeekData(weather, airQ, locSnap.lat, locSnap.lon, westData);
   }
   const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
@@ -310,11 +322,11 @@ async function loadAppData() {
   // and fresh data arrives later.
   const wasFreshFetch = !weather._isStale && weather._modelCount === 1;
   if (wasFreshFetch) {
-    fetchWeekEnsemble(locSnapshot.lat, locSnapshot.lon, weather, true).then(async refined => {
+    fetchWeekEnsemble(locSnap.lat, locSnap.lon, weather, true).then(async refined => {
       if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
-        calcWeekData(refined, airQ, locSnapshot.lat, locSnapshot.lon, westData),
-        locSnapshot
+        calcWeekData(refined, airQ, locSnap.lat, locSnap.lon, westData),
+        locSnap
       );
       const freshSpotScores = calcNearbyAvgScore(null, _weekData);
       refreshMainScores(_weekData, freshSpotScores);
@@ -322,26 +334,26 @@ async function loadAppData() {
     }).catch(err => console.warn('[boot] ensemble refinement failed:', err.message));
   } else if (weather._isStale) {
     // Offline — apply EMA to whatever we have
-    _weekData = _applyScoreEMA(_weekData, _loc);
+    _weekData = _applyScoreEMA(_weekData, locSnap);
   }
 
   if (gen !== _locGen) return;
   refreshMainScores(_weekData, spotAvgScores);
 
-  _scheduleSpotPreload(_weekData, _loc);
+  _scheduleSpotPreload(_weekData, { lat: locSnap.lat, lon: locSnap.lon });
   updateThemeColor(_weekData);
 
   if (_weekData[0]) {
-    recordPrediction(_weekData[0].date, _weekData[0].score, _weekData[0], _loc.lat, _loc.lon);
+    recordPrediction(_weekData[0].date, _weekData[0].score, _weekData[0], locSnap.lat, locSnap.lon);
   }
 
   if (gen !== _locGen) return;
   const unfilled = getUnfilledDates();
-  if (unfilled.length > 0 && _loc) {
+  if (unfilled.length > 0) {
     const ssHour = parseInt(_weekData[0]?.sunset?.split(':')[0] || '18', 10);
     Promise.allSettled(
       unfilled.slice(0, 3).map(dt =>
-        fetchActualForDate(dt, _loc.lat, _loc.lon, ssHour)
+        fetchActualForDate(dt, locSnap.lat, locSnap.lon, ssHour)
           .then(() => processLearningForEntry(dt))
       )
     ).then(results => {
@@ -351,10 +363,20 @@ async function loadAppData() {
   }
 
   if (saved && !saved.city) {
-    fetchCityName(_loc.lat, _loc.lon).then(city => {
+    fetchCityName(locSnap.lat, locSnap.lon).then(city => {
       _city = city;
-      saveLocation(_loc.lat, _loc.lon, city);
+      saveLocation(locSnap.lat, locSnap.lon, city);
     }).catch(e => console.warn('[boot] city name fetch failed:', e.message));
+  }
+
+  } finally {
+    _isRefreshing = false;
+    // Drain queued location if GPS resolved during boot
+    if (_pendingLocation) {
+      const pending = _pendingLocation;
+      _pendingLocation = null;
+      handleSetLocation({ detail: pending });
+    }
   }
 }
 
@@ -387,6 +409,9 @@ async function handleRefresh(e) {
     _locGen++;
     const gen = _locGen;
     const lat = _loc.lat, lon = _loc.lon;
+
+    // Rewire SWR subscription to the (possibly new) zone
+    _rewireZoneSubscription(lat, lon, gen);
 
     // Clear the EMA score pin so a forced refresh always shows fresh scores
     // without smoothing from a previous session.
@@ -470,6 +495,9 @@ async function handleSetLocation(e) {
 
     _locGen++;
     const gen = _locGen;
+
+    // Rewire SWR subscription to the new zone
+    _rewireZoneSubscription(lat, lon, gen);
 
     // Clear EMA pin for the new location so scores aren't smoothed against
     // a previous session's data at a different spot.
