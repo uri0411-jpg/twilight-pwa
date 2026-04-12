@@ -93,6 +93,7 @@ let _city     = '';
 let _airQuality      = null;
 let _spotsInitialized    = false;
 let _isRefreshing        = false; // FIX: debounce guard for refresh
+let _locGen              = 0;    // monotonic counter — guards stale async callbacks
 
 // ─────────────────────────────────────────
 //  Boot
@@ -249,6 +250,10 @@ async function loadAppData(forceRefresh = false) {
     });
   }
 
+  // Capture location generation — stale async callbacks will check this
+  _locGen++;
+  const gen = _locGen;
+
   // On stale reload, clear EMA pin so fresh scores aren't smoothed with old data
   if (forceRefresh) {
     const pinKey = `${_SCORE_PIN_KEY}_${_loc.lat.toFixed(2)}_${_loc.lon.toFixed(2)}`;
@@ -293,21 +298,23 @@ async function loadAppData(forceRefresh = false) {
 
   // ── Phase 2: Enrich with non-critical data (AQ, horizon) ──
   const [airQ, westData] = await Promise.all([aqPromise, westPromise]);
+  if (gen !== _locGen) return; // location changed during boot — abort stale writes
   _airQuality = airQ;
 
   // Recalculate only if we got additional data
+  const locSnapshot = { lat: _loc.lat, lon: _loc.lon };
   if (airQ || westData) {
-    _weekData = calcWeekData(weather, _airQuality, _loc.lat, _loc.lon, westData);
+    _weekData = calcWeekData(weather, airQ, locSnapshot.lat, locSnapshot.lon, westData);
   }
   const spotAvgScores = calcNearbyAvgScore(null, _weekData);
 
   // ── Phase 3: Background ensemble refinement ──
   if (!weather._isStale) {
-    fetchWeekEnsemble(_loc.lat, _loc.lon, weather).then(async refined => {
-      if (!refined) return;
+    fetchWeekEnsemble(locSnapshot.lat, locSnapshot.lon, weather).then(async refined => {
+      if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
-        calcWeekData(refined, _airQuality, _loc.lat, _loc.lon, westData),
-        _loc
+        calcWeekData(refined, airQ, locSnapshot.lat, locSnapshot.lon, westData),
+        locSnapshot
       );
       const freshSpotScores = calcNearbyAvgScore(null, _weekData);
       refreshMainScores(_weekData, freshSpotScores);
@@ -318,6 +325,7 @@ async function loadAppData(forceRefresh = false) {
     _weekData = _applyScoreEMA(_weekData, _loc);
   }
 
+  if (gen !== _locGen) return;
   refreshMainScores(_weekData, spotAvgScores);
 
   _scheduleSpotPreload(_weekData, _loc);
@@ -327,6 +335,7 @@ async function loadAppData(forceRefresh = false) {
     recordPrediction(_weekData[0].date, _weekData[0].score, _weekData[0], _loc.lat, _loc.lon);
   }
 
+  if (gen !== _locGen) return;
   const unfilled = getUnfilledDates();
   if (unfilled.length > 0 && _loc) {
     const ssHour = parseInt(_weekData[0]?.sunset?.split(':')[0] || '18', 10);
@@ -375,39 +384,44 @@ async function handleRefresh(e) {
       }
     }
 
+    _locGen++;
+    const gen = _locGen;
+    const lat = _loc.lat, lon = _loc.lon;
+
     // Clear the EMA score pin so a forced refresh always shows fresh scores
     // without smoothing from a previous session.
-    const pinKey = `${_SCORE_PIN_KEY}_${_loc.lat.toFixed(2)}_${_loc.lon.toFixed(2)}`;
+    const pinKey = `${_SCORE_PIN_KEY}_${lat.toFixed(2)}_${lon.toFixed(2)}`;
     localStorage.removeItem(pinKey);
 
     // Start all fetches concurrently
-    const weatherPromise = fetchWeekFast(_loc.lat, _loc.lon, true);
-    const aqPromise      = fetchAirQuality(_loc.lat, _loc.lon, true).catch(() => null);
-    const westPromise    = fetchWesternHorizon(_loc.lat, _loc.lon, true).catch(() => null);
+    const weatherPromise = fetchWeekFast(lat, lon, true);
+    const aqPromise      = fetchAirQuality(lat, lon, true).catch(() => null);
+    const westPromise    = fetchWesternHorizon(lat, lon, true).catch(() => null);
 
     // Render as soon as primary weather arrives
     const weather = await weatherPromise;
-    _weekData = calcWeekData(weather, null, _loc.lat, _loc.lon, null);
+    _weekData = calcWeekData(weather, null, lat, lon, null);
     await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
     showLoading(false);
 
     // Enrich with non-critical data
     const [airQ, westData] = await Promise.all([aqPromise, westPromise]);
+    if (gen !== _locGen) return;
     _airQuality = airQ;
     if (airQ || westData) {
       _weekData = _applyScoreEMA(
-        calcWeekData(weather, _airQuality, _loc.lat, _loc.lon, westData),
-        _loc
+        calcWeekData(weather, airQ, lat, lon, westData),
+        { lat, lon }
       );
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
     // Background ensemble refinement
-    fetchWeekEnsemble(_loc.lat, _loc.lon, weather).then(refined => {
-      if (!refined) return;
+    fetchWeekEnsemble(lat, lon, weather).then(refined => {
+      if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
-        calcWeekData(refined, _airQuality, _loc.lat, _loc.lon, westData),
-        _loc
+        calcWeekData(refined, airQ, lat, lon, westData),
+        { lat, lon }
       );
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }).catch(err => console.warn('[refresh] ensemble failed:', err.message));
@@ -454,6 +468,9 @@ async function handleSetLocation(e) {
     _city = city || 'מיקום מותאם';
     saveLocation(lat, lon, _city);
 
+    _locGen++;
+    const gen = _locGen;
+
     // Clear EMA pin for the new location so scores aren't smoothed against
     // a previous session's data at a different spot.
     const pinKey = `${_SCORE_PIN_KEY}_${lat.toFixed(2)}_${lon.toFixed(2)}`;
@@ -472,21 +489,22 @@ async function handleSetLocation(e) {
 
     // Enrich with non-critical data
     const [airQ, westData] = await Promise.all([aqPromise, westPromise]);
+    if (gen !== _locGen) return;
     _airQuality = airQ;
     if (airQ || westData) {
       _weekData = _applyScoreEMA(
-        calcWeekData(weather, _airQuality, lat, lon, westData),
-        _loc
+        calcWeekData(weather, airQ, lat, lon, westData),
+        { lat, lon }
       );
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
     // Background ensemble refinement
     fetchWeekEnsemble(lat, lon, weather).then(refined => {
-      if (!refined) return;
+      if (!refined || gen !== _locGen) return;
       _weekData = _applyScoreEMA(
-        calcWeekData(refined, _airQuality, lat, lon, westData),
-        _loc
+        calcWeekData(refined, airQ, lat, lon, westData),
+        { lat, lon }
       );
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }).catch(err => console.warn('[setLocation] ensemble failed:', err.message));
