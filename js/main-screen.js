@@ -469,6 +469,63 @@ export function refreshMain(weekData) {
   if (scrollEl) scrollEl.innerHTML = renderDailyCards(weekData);
 }
 
+/**
+ * Surgical score update — replaces only score-driven elements in-place.
+ * Never touches .bg-sunset or any layout DOM, so the background image
+ * stays mounted and there is no repaint flash between Phase 2 and Phase 3.
+ *
+ * Use instead of initMainScreen for any render that happens after the
+ * initial full build (AQ enrichment, ensemble refinement).
+ */
+export function refreshMainScores(weekData, spotAvgScores = null) {
+  // Guard: if the main screen hasn't been built yet, fall through silently.
+  if (!document.querySelector('.score-gauge-wrap')) return;
+
+  _weekData      = weekData;
+  _spotAvgScores = spotAvgScores;
+
+  // Recompute physics sky colours for every day (same as initMainScreen does)
+  for (const day of weekData) computeDaySkyColors(day);
+
+  const today = weekData[0];
+  if (!today) return;
+
+  const displayScore = spotAvgScores?.[0] ?? today.score;
+  const displayColor = scoreToBarStyle(displayScore, today.skyColors).scoreColor;
+
+  // 1. Swap out just the gauge SVG — keeps arc animation, avoids full rebuild
+  const gaugeWrap = document.querySelector('.score-gauge-wrap');
+  if (gaugeWrap) {
+    const svgEl = gaugeWrap.querySelector('svg');
+    if (svgEl) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = buildGaugeArc(displayScore, displayColor, 130);
+      svgEl.replaceWith(tmp.firstElementChild);
+      // Kick the arc animation (same two-rAF trick as initMainScreen)
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const arc = gaugeWrap.querySelector('.gauge-arc-fill[data-arc-target]');
+        if (arc) arc.style.strokeDasharray = arc.dataset.arcTarget;
+      }));
+    }
+    gaugeWrap.setAttribute('aria-label', `ציון שקיעה: ${displayScore.toFixed(1)} מתוך 10`);
+    gaugeWrap.dataset.scoreTier = displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low';
+  }
+
+  // 2. Story label below the gauge
+  const descEl = document.querySelector('.score-desc');
+  if (descEl) descEl.textContent = scoreToStory(displayScore);
+
+  // 3. Week bars + daily scroll cards
+  refreshMain(weekData);
+
+  // 4. Restart live gradient so it picks up the new sky colours
+  if (_stopLiveGradient) { _stopLiveGradient(); _stopLiveGradient = null; }
+  _stopLiveGradient = startLiveGradient(today, _loc);
+
+  // 5. Propagate sky colours to all score badges, strips, etc.
+  repaintScoreColors();
+}
+
 // ─────────────────────────────────────────
 //  Countdown timer to next event
 // ─────────────────────────────────────────

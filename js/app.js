@@ -7,7 +7,7 @@ import { initNav, showScreen, onScreenChange } from './nav.js';
 import { getGPS, saveLocation, loadLocation }  from './location.js';
 import { fetchWeek, fetchWeekFast, fetchWeekEnsemble, fetchCityName, fetchAirQuality, fetchWesternHorizon } from './api.js';
 import { calcWeekData }                        from './score.js';
-import { initMainScreen, showMainSkeleton, repaintScoreColors } from './main-screen.js';
+import { initMainScreen, showMainSkeleton, repaintScoreColors, refreshMainScores } from './main-screen.js';
 import { initSpotsScreen, calcNearbyAvgScore, preloadSpotsData, invalidatePreloadedSpots } from './spots-screen.js';
 import { initSettingsScreen }                  from './settings-screen.js';
 import { initLearningScreen }                  from './learning-screen.js';
@@ -310,7 +310,7 @@ async function loadAppData(forceRefresh = false) {
         _loc
       );
       const freshSpotScores = calcNearbyAvgScore(null, _weekData);
-      await initMainScreen(_loc, _city, _weekData, freshSpotScores);
+      refreshMainScores(_weekData, freshSpotScores);
       console.log(`[boot] ensemble refinement applied (${refined._modelCount} models)`);
     }).catch(err => console.warn('[boot] ensemble refinement failed:', err.message));
   } else {
@@ -318,7 +318,7 @@ async function loadAppData(forceRefresh = false) {
     _weekData = _applyScoreEMA(_weekData, _loc);
   }
 
-  await initMainScreen(_loc, _city, _weekData, spotAvgScores);
+  refreshMainScores(_weekData, spotAvgScores);
 
   _scheduleSpotPreload(_weekData, _loc);
   updateThemeColor(_weekData);
@@ -399,17 +399,17 @@ async function handleRefresh(e) {
         calcWeekData(weather, _airQuality, _loc.lat, _loc.lon, westData),
         _loc
       );
-      await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
+      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
     // Background ensemble refinement
-    fetchWeekEnsemble(_loc.lat, _loc.lon, weather).then(async refined => {
+    fetchWeekEnsemble(_loc.lat, _loc.lon, weather).then(refined => {
       if (!refined) return;
       _weekData = _applyScoreEMA(
         calcWeekData(refined, _airQuality, _loc.lat, _loc.lon, westData),
         _loc
       );
-      await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
+      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }).catch(err => console.warn('[refresh] ensemble failed:', err.message));
 
     showToast('נתונים עודכנו', 'success');
@@ -478,17 +478,17 @@ async function handleSetLocation(e) {
         calcWeekData(weather, _airQuality, lat, lon, westData),
         _loc
       );
-      await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
+      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
     // Background ensemble refinement
-    fetchWeekEnsemble(lat, lon, weather).then(async refined => {
+    fetchWeekEnsemble(lat, lon, weather).then(refined => {
       if (!refined) return;
       _weekData = _applyScoreEMA(
         calcWeekData(refined, _airQuality, lat, lon, westData),
         _loc
       );
-      await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
+      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }).catch(err => console.warn('[setLocation] ensemble failed:', err.message));
 
     updateThemeColor(_weekData);
