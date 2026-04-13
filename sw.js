@@ -107,13 +107,17 @@ self.addEventListener('install', event => {
 // ─── ACTIVATE ──────────────────────────
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys
-          .filter(key => key !== CACHE_NAME && key !== TILE_CACHE)
-          .map(key => caches.delete(key))
-      ))
-      .then(() => self.clients.claim())
+    caches.keys().then(keys => {
+      const oldCaches = keys.filter(key => key !== CACHE_NAME && key !== TILE_CACHE);
+      // First install has no old caches to purge — skip claim() so we don't
+      // disrupt in-flight fetches the page started before the SW existed.
+      const isFirstInstall = oldCaches.length === 0;
+      return Promise.all(oldCaches.map(key => caches.delete(key)))
+        .then(() => {
+          if (!isFirstInstall) return self.clients.claim();
+          console.log('[SW] First install — skipping claim() to protect boot fetches');
+        });
+    })
   );
 });
 

@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════
-//  TWILIGHT — locationSearch.js
+//  TWILIGHT — locationSearch.js v2
 //  Unified location search: local cities + Nominatim fallback
-//  Autocomplete dropdown with recent locations
+//  Class-based with WeakMap auto-cleanup for mobile reliability
 // ═══════════════════════════════════════════
 
 import { esc } from './ui.js';
@@ -135,20 +135,37 @@ function searchLocal(query) {
 
 // ─── Nominatim fallback ────────────────────
 async function searchNominatim(query, signal) {
-  const res = await fetch(
-    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=il&accept-language=he`,
-    { headers: { 'User-Agent': 'TWILIGHT-PWA/1.0' }, signal }
-  );
-  const data = await res.json();
-  return data.map(d => ({
-    name: d.display_name?.split(',')[0] || query,
-    lat: parseFloat(d.lat),
-    lon: parseFloat(d.lon),
-    _source: 'nominatim'
-  }));
+  const timeoutCtrl = new AbortController();
+  const timer = setTimeout(() => timeoutCtrl.abort(), 5000);
+
+  // Chain abort: if outer signal fires, abort our inner controller too
+  const onOuterAbort = () => timeoutCtrl.abort();
+  signal?.addEventListener('abort', onOuterAbort, { once: true });
+
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=il&accept-language=he`,
+      { headers: { 'User-Agent': 'TWILIGHT-PWA/1.0' }, signal: timeoutCtrl.signal }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data
+      .map(d => ({
+        name: d.display_name?.split(',')[0] || query,
+        lat: parseFloat(d.lat),
+        lon: parseFloat(d.lon),
+        _source: 'nominatim'
+      }))
+      .filter(d => !isNaN(d.lat) && !isNaN(d.lon));
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onOuterAbort);
+  }
 }
 
-// ─── Dropdown UI builder ───────────────────
+// ─── Dropdown item builder ─────────────────
 function buildDropdownItem(item, idx, opts = {}) {
   const icon = opts.isRecent
     ? '<svg width="12" height="12" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
@@ -157,11 +174,235 @@ function buildDropdownItem(item, idx, opts = {}) {
 }
 
 // ═══════════════════════════════════════════
-//  Public API
+//  LocationSearch class — lifecycle-managed
+// ═══════════════════════════════════════════
+
+const _instances = new WeakMap();
+
+class LocationSearch {
+  constructor(containerEl, options) {
+    this._container = containerEl;
+    this._options = options;
+    this._ac = new AbortController();    // master signal for all DOM listeners
+    this._fetchCtrl = null;              // Nominatim abort controller
+    this._debounceTimer = null;
+    this._currentItems = [];
+    this._highlightIdx = -1;
+    this._destroyed = false;
+
+    this._buildDOM();
+    this._attachEvents();
+  }
+
+  // ─── DOM construction ───
+  _buildDOM() {
+    const {
+      placeholder = 'הקלד שם עיר...',
+      showGpsButton = true,
+      showCloseButton = true,
+    } = this._options;
+
+    this._container.innerHTML = `
+      <div class="loc-search-row1">
+        <div class="search-input-wrap" style="flex:1">
+          <svg width="14" height="14" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input class="search-input loc-search-input" type="text" placeholder="${esc(placeholder)}" dir="rtl" autocomplete="off" inputmode="search" enterkeyhint="search" />
+        </div>
+        ${showCloseButton ? '<button class="search-filter-btn loc-search-close" type="button" title="סגור">✕</button>' : ''}
+      </div>
+      ${showGpsButton ? `
+      <div class="loc-search-row2">
+        <button class="search-filter-btn loc-search-btn-wide loc-search-gps" type="button">
+          <svg width="14" height="14" fill="var(--gold-light)" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg>
+          מיקום נוכחי
+        </button>
+      </div>` : ''}
+      <div class="location-dropdown"></div>
+    `;
+
+    this._input    = this._container.querySelector('.loc-search-input');
+    this._dropdown = this._container.querySelector('.location-dropdown');
+    this._closeBtn = this._container.querySelector('.loc-search-close');
+    this._gpsBtn   = this._container.querySelector('.loc-search-gps');
+  }
+
+  // ─── Event binding ───
+  _attachEvents() {
+    const sig = { signal: this._ac.signal };
+
+    // Input — debounced search
+    this._input?.addEventListener('input', () => {
+      clearTimeout(this._debounceTimer);
+      this._debounceTimer = setTimeout(() => this._handleSearch(), 250);
+    }, sig);
+
+    // Focus — show initial suggestions
+    this._input?.addEventListener('focus', () => {
+      if (!this._input.value.trim()) this._showInitialSuggestions();
+    }, sig);
+
+    // Keyboard navigation
+    this._input?.addEventListener('keydown', (e) => this._handleKeydown(e), sig);
+
+    // Dropdown item selection — use pointerdown (fires BEFORE blur on mobile)
+    this._dropdown.addEventListener('pointerdown', (e) => {
+      const btn = e.target.closest('.location-dropdown-item');
+      if (!btn) return;
+      e.preventDefault(); // prevent input blur
+      const idx = parseInt(btn.dataset.idx);
+      if (this._currentItems[idx]) this._selectItem(this._currentItems[idx]);
+    }, sig);
+
+    // Close button
+    this._closeBtn?.addEventListener('click', () => {
+      this._closeDropdown();
+      this._container.classList.remove('open');
+      this._options.onClose?.();
+    }, sig);
+
+    // GPS button
+    if (this._gpsBtn && this._options.onGps) {
+      this._gpsBtn.addEventListener('click', () => {
+        this._closeDropdown();
+        this._options.onGps();
+      }, sig);
+    }
+
+    // Outside close — focusout with rAF guard
+    this._container.addEventListener('focusout', () => {
+      requestAnimationFrame(() => {
+        if (this._destroyed) return;
+        if (!this._container.contains(document.activeElement)) {
+          this._closeDropdown();
+        }
+      });
+    }, sig);
+
+    // Backup: close dropdown on outside pointerdown (catches taps on non-focusable areas)
+    document.addEventListener('pointerdown', (e) => {
+      if (!this._container.contains(e.target)) this._closeDropdown();
+    }, sig);
+  }
+
+  // ─── Keyboard navigation ───
+  _handleKeydown(e) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      this._highlightIdx = Math.min(this._highlightIdx + 1, this._currentItems.length - 1);
+      this._updateHighlight();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      this._highlightIdx = Math.max(this._highlightIdx - 1, 0);
+      this._updateHighlight();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const idx = this._highlightIdx >= 0 ? this._highlightIdx : 0;
+      if (this._currentItems[idx]) this._selectItem(this._currentItems[idx]);
+    } else if (e.key === 'Escape') {
+      this._closeDropdown();
+      this._options.onClose?.();
+    }
+  }
+
+  _updateHighlight() {
+    const items = this._dropdown.querySelectorAll('.location-dropdown-item');
+    items.forEach((el, i) => {
+      el.classList.toggle('highlighted', i === this._highlightIdx);
+    });
+    // Scroll highlighted item into view
+    items[this._highlightIdx]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  // ─── Search handler ───
+  async _handleSearch() {
+    if (this._destroyed) return;
+    const raw = this._input?.value.trim() || '';
+
+    // Extract type if spots mode
+    let query = raw;
+    if (this._options.extractType && raw) {
+      const { cleaned } = this._options.extractType(raw);
+      query = cleaned || raw;
+    }
+
+    if (query.length < 2) {
+      if (query.length === 0) this._showInitialSuggestions();
+      else this._closeDropdown();
+      return;
+    }
+
+    // Local search first (instant)
+    const local = searchLocal(query);
+    if (local.length) this._renderDropdown(local);
+
+    // Nominatim fallback if fewer than 3 local results
+    if (local.length < 3) {
+      if (this._fetchCtrl) this._fetchCtrl.abort();
+      this._fetchCtrl = new AbortController();
+      const remote = await searchNominatim(query, this._fetchCtrl.signal);
+      if (this._destroyed) return;
+      // Only update if input hasn't changed while we waited
+      if (this._input?.value.trim() === raw) {
+        const localNames = new Set(local.map(l => normalize(l.name)));
+        const merged = [...local, ...remote.filter(r => !localNames.has(normalize(r.name)))].slice(0, 6);
+        this._renderDropdown(merged);
+      }
+    }
+  }
+
+  // ─── Initial suggestions ───
+  _showInitialSuggestions() {
+    const recent = loadRecent();
+    const popular = ISRAEL_CITIES.slice(0, 5).filter(c => !recent.some(r => r.name === c.name));
+    const combined = [...recent, ...popular].slice(0, 6);
+    if (combined.length) this._renderDropdown(combined, { isRecent: true, recentCount: recent.length });
+  }
+
+  // ─── Dropdown rendering ───
+  _renderDropdown(items, opts = {}) {
+    this._currentItems = items;
+    this._highlightIdx = -1;
+    if (!items.length) { this._closeDropdown(); return; }
+    this._dropdown.innerHTML = items.map((item, i) =>
+      buildDropdownItem(item, i, { isRecent: opts.isRecent && i < (opts.recentCount || 0) })
+    ).join('');
+    this._dropdown.classList.add('open');
+  }
+
+  _closeDropdown() {
+    this._dropdown.classList.remove('open');
+    this._dropdown.innerHTML = '';
+    this._currentItems = [];
+    this._highlightIdx = -1;
+  }
+
+  // ─── Item selection ───
+  _selectItem(item) {
+    saveRecent(item);
+    this._closeDropdown();
+    if (this._input) this._input.value = '';
+    this._options.onSelect?.({ lat: item.lat, lon: item.lon, city: item.name });
+  }
+
+  // ─── Cleanup ───
+  destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    this._ac.abort();
+    clearTimeout(this._debounceTimer);
+    if (this._fetchCtrl) this._fetchCtrl.abort();
+    this._container.innerHTML = '';
+  }
+}
+
+// ═══════════════════════════════════════════
+//  Public API — same contract as v1
 // ═══════════════════════════════════════════
 
 /**
  * Initialize location search autocomplete.
+ * Auto-cleans up any previous instance on the same container (WeakMap guard).
+ *
  * @param {HTMLElement} containerEl - Container for the search bar
  * @param {Object} options
  * @param {Function} options.onSelect - Callback: ({lat, lon, city}) => void
@@ -174,161 +415,16 @@ function buildDropdownItem(item, idx, opts = {}) {
  * @returns {Function} cleanup function
  */
 export function initLocationSearch(containerEl, options = {}) {
-  const {
-    onSelect,
-    placeholder = 'הקלד שם עיר...',
-    showGpsButton = true,
-    showCloseButton = true,
-    onGps,
-    onClose,
-    extractType
-  } = options;
-
-  // Build HTML
-  const html = `
-    <div class="loc-search-row1">
-      <div class="search-input-wrap" style="flex:1">
-        <svg width="14" height="14" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input class="search-input loc-search-input" type="text" placeholder="${esc(placeholder)}" dir="rtl" autocomplete="off" />
-      </div>
-      ${showCloseButton ? '<button class="search-filter-btn loc-search-close" type="button" title="סגור">✕</button>' : ''}
-    </div>
-    ${showGpsButton ? `
-    <div class="loc-search-row2">
-      <button class="search-filter-btn loc-search-btn-wide loc-search-gps" type="button">
-        <svg width="14" height="14" fill="var(--gold-light)" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg>
-        מיקום נוכחי
-      </button>
-    </div>` : ''}
-    <div class="location-dropdown"></div>
-  `;
-  containerEl.innerHTML = html;
-
-  const input = containerEl.querySelector('.loc-search-input');
-  const dropdown = containerEl.querySelector('.location-dropdown');
-  const closeBtn = containerEl.querySelector('.loc-search-close');
-  const gpsBtn = containerEl.querySelector('.loc-search-gps');
-
-  let debounceTimer = null;
-  let abortCtrl = null;
-  let currentItems = [];
-  const ac = new AbortController();
-
-  // ─── Render dropdown ───
-  function renderDropdown(items, opts = {}) {
-    currentItems = items;
-    if (!items.length) { dropdown.classList.remove('open'); dropdown.innerHTML = ''; return; }
-    dropdown.innerHTML = items.map((item, i) => buildDropdownItem(item, i, { isRecent: opts.isRecent && i < (opts.recentCount || 0) })).join('');
-    dropdown.classList.add('open');
+  // Auto-cleanup previous instance on same container — prevents duplicate listeners
+  if (_instances.has(containerEl)) {
+    _instances.get(containerEl).destroy();
   }
 
-  function closeDropdown() {
-    dropdown.classList.remove('open');
-    dropdown.innerHTML = '';
-    currentItems = [];
-  }
+  const instance = new LocationSearch(containerEl, options);
+  _instances.set(containerEl, instance);
 
-  function selectItem(item) {
-    saveRecent(item);
-    closeDropdown();
-    if (input) input.value = '';
-    onSelect?.({ lat: item.lat, lon: item.lon, city: item.name });
-  }
-
-  // ─── Show recent + popular on focus ───
-  function showInitialSuggestions() {
-    const recent = loadRecent();
-    const popular = ISRAEL_CITIES.slice(0, 5).filter(c => !recent.some(r => r.name === c.name));
-    const combined = [...recent, ...popular].slice(0, 6);
-    if (combined.length) renderDropdown(combined, { isRecent: true, recentCount: recent.length });
-  }
-
-  // ─── Search handler (debounced) ───
-  async function handleInput() {
-    const raw = input?.value.trim() || '';
-
-    // Extract type if spots mode
-    let query = raw;
-    if (extractType && raw) {
-      const { cleaned } = extractType(raw);
-      query = cleaned || raw;
-    }
-
-    if (query.length < 2) {
-      if (query.length === 0) showInitialSuggestions();
-      else closeDropdown();
-      return;
-    }
-
-    // Local search first (instant)
-    const local = searchLocal(query);
-    if (local.length) renderDropdown(local);
-
-    // Nominatim fallback if fewer than 3 local results
-    if (local.length < 3) {
-      if (abortCtrl) abortCtrl.abort();
-      abortCtrl = new AbortController();
-      try {
-        const remote = await searchNominatim(query, abortCtrl.signal);
-        // Merge: local first, then remote that don't duplicate
-        const localNames = new Set(local.map(l => normalize(l.name)));
-        const merged = [...local, ...remote.filter(r => !localNames.has(normalize(r.name)))].slice(0, 6);
-        if (input?.value.trim() === raw) renderDropdown(merged);
-      } catch {
-        // Abort or network error — keep local results
-      }
-    }
-  }
-
-  // ─── Event listeners ───
-  input?.addEventListener('input', () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(handleInput, 300);
-  }, { signal: ac.signal });
-
-  input?.addEventListener('focus', () => {
-    if (!input.value.trim()) showInitialSuggestions();
-  }, { signal: ac.signal });
-
-  input?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (currentItems.length) selectItem(currentItems[0]);
-    } else if (e.key === 'Escape') {
-      closeDropdown();
-    }
-  }, { signal: ac.signal });
-
-  dropdown.addEventListener('click', (e) => {
-    const btn = e.target.closest('.location-dropdown-item');
-    if (!btn) return;
-    const idx = parseInt(btn.dataset.idx);
-    if (currentItems[idx]) selectItem(currentItems[idx]);
-  }, { signal: ac.signal });
-
-  closeBtn?.addEventListener('click', () => {
-    closeDropdown();
-    containerEl.classList.remove('open');
-    onClose?.();
-  }, { signal: ac.signal });
-
-  if (gpsBtn && onGps) {
-    gpsBtn.addEventListener('click', () => {
-      closeDropdown();
-      onGps();
-    }, { signal: ac.signal });
-  }
-
-  // Close dropdown on outside click
-  function handleOutsideClick(e) {
-    if (!containerEl.contains(e.target)) closeDropdown();
-  }
-  document.addEventListener('click', handleOutsideClick, { signal: ac.signal });
-
-  // ─── Cleanup ───
   return function cleanup() {
-    ac.abort();
-    clearTimeout(debounceTimer);
-    if (abortCtrl) abortCtrl.abort();
+    instance.destroy();
+    _instances.delete(containerEl);
   };
 }

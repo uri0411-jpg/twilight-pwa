@@ -668,9 +668,46 @@ function buildScoreParams(h, idx, aq, aqIdx, lat, lon, eventISO, date, weatherCo
 }
 
 // ─────────────────────────────────────────
+//  Safe fallback day — returned when weather data is missing/malformed.
+//  Contains every property that downstream consumers (buildMainHTML,
+//  computeDaySkyColors, decisionEngine, etc.) read.
+// ─────────────────────────────────────────
+function _safeFallbackDay(dayIndex) {
+  const today = new Date();
+  today.setDate(today.getDate() + dayIndex);
+  const date = today.toISOString().slice(0, 10);
+  return {
+    date, day: '', shortDate: date,
+    score: 0, srScore: 0, ssScore: 0, twScore: 0, dramaLevel: 0, goldenHourMin: 0,
+    certainty: 0, scoreLabel: 'אין נתונים',
+    sunrise: '06:00', sunset: '19:00', twilight: '', purpleLightTime: '19:18',
+    temp: '--°', tempMin: '--°', feelsLike: '--°',
+    cond: 'אין נתונים', wind: '0 קמ"ש', windDir: '',
+    windGusts: '0 קמ"ש', humidity: '0%', dewPoint: '0°',
+    visibility: '0', cloud: '0%', pressure: '1013 mb', uvIndex: '0',
+    rainProb: '0%', rainMm: '0 מ"מ', dust: '0 µg',
+    _cloudRaw: 0, _humidityRaw: 50, _visibilityRaw: 10, _windRaw: 0,
+    _cloudLowRaw: 0, _cloudMidRaw: 0, _cloudHighRaw: 0,
+    _rainMmRaw: 0, _cloudDelta: 0, _dustRaw: 0, _pm10Raw: 0,
+    palette: null, afterglow: 0,
+    _solarAzimuth: 270, _solarElevation: 0,
+    turbidity: 0.05, mieIntensity: 0, rayleighSpread: 0,
+    physicsContributions: null, mieGrowthFactor: 1, angstromExp: 0.5,
+    ozoneDU: 300, goldenWindow: null,
+    scoreEngine: null, scoreModel: null,
+    hourlyFull: [], tags: [], skyColors: null,
+  };
+}
+
+// ─────────────────────────────────────────
 //  CalcDayData
 // ─────────────────────────────────────────
 export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, lon = 34.78, westernData = null) {
+  // Guard: malformed or empty weather data → return safe placeholder
+  if (!weatherData?.daily?.time || !weatherData?.hourly?.time) {
+    return _safeFallbackDay(dayIndex);
+  }
+
   const d  = weatherData.daily;
   const h  = weatherData.hourly;
   const ht = h.time;

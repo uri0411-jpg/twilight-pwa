@@ -156,7 +156,8 @@ async function boot() {
   } catch (err) {
     console.error('[boot] Failed:', err);
     showToast('שגיאה בטעינת נתונים — לחץ לנסות שוב', 'error');
-    const errMsg = (err && (err.message || err.toString())) || 'unknown';
+    const errMsg = ((err && (err.message || err.toString())) || 'unknown')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     document.querySelector('#screen-main').innerHTML =
       `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:1rem;padding:1rem;text-align:center">
          <p style="color:var(--cream);font-size:1.1rem">שגיאה בטעינת נתונים</p>
@@ -222,7 +223,10 @@ async function syncLocationFromState() {
 async function autoSeedIfNeeded() {
   try {
     if (getLearningStats().sampleSize >= 50) return; // already trained
-    const res = await fetch('./learning-seed.json');
+    const seedCtrl = new AbortController();
+    const seedTimer = setTimeout(() => seedCtrl.abort(), 5000); // 5s max — don't block boot
+    const res = await fetch('./learning-seed.json', { signal: seedCtrl.signal });
+    clearTimeout(seedTimer);
     if (!res.ok) return;
     const data = await res.json();
     if (!Array.isArray(data.entries)) return;
@@ -313,6 +317,9 @@ async function loadAppData() {
   // ── Phase 1: Render with primary weather model ──
   const weather = await weatherPromise;
   if (gen !== _locGen) return; // location changed during await — abort
+  if (!weather?.daily?.time?.length || !weather?.hourly?.time?.length) {
+    throw new Error('נתוני מזג אוויר ריקים — נסה שוב');
+  }
   _weekData = calcWeekData(weather, null, locSnap.lat, locSnap.lon, null);
   await initMainScreen({ lat: locSnap.lat, lon: locSnap.lon }, _city, _weekData, null);
 

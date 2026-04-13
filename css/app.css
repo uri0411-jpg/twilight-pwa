@@ -721,10 +721,12 @@ body.has-install-banner .screen { padding-top: 56px; }
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s ease;
+  touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 .location-dropdown-item:hover,
-.location-dropdown-item:focus {
+.location-dropdown-item:focus,
+.location-dropdown-item.highlighted {
   background: rgba(240, 184, 74, 0.12);
   outline: none;
 }

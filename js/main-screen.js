@@ -43,6 +43,7 @@ function ensureBackgroundReady() {
 let _weekData = [];
 let _city = '';
 let _loc   = null;
+let _locationSearchCleanup = null;
 
 // ─────────────────────────────────────────
 //  Score → poetic Hebrew story label
@@ -410,6 +411,11 @@ export function repaintScoreColors() {
 }
 
 export async function initMainScreen(loc, city, weekData, spotAvgScores = null) {
+  if (!weekData?.length || !weekData[0]) {
+    console.error('[main] initMainScreen called with empty weekData — aborting render');
+    return;
+  }
+
   _weekData = weekData;
   _city     = city;
   _loc      = loc;
@@ -1429,12 +1435,13 @@ function attachMainEvents() {
   }
 
   // ─── Location search (autocomplete module) ───
+  if (_locationSearchCleanup) { _locationSearchCleanup(); _locationSearchCleanup = null; }
   const cityDisplay = document.getElementById('city-display');
   const searchBar   = document.getElementById('location-search-bar');
 
   if (cityDisplay && searchBar) {
     // Initialize the autocomplete search module
-    initLocationSearch(searchBar, {
+    _locationSearchCleanup = initLocationSearch(searchBar, {
       onSelect: (result) => {
         searchBar.classList.remove('open');
         cityDisplay.style.visibility = '';
