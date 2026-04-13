@@ -53,6 +53,9 @@ import { loadSkyMask, drawSkyMask, getSkyMaskSync } from './skyMask.js';
 
 const CANVAS_ID = 'sky-canvas';
 
+// ── Offscreen commit buffer (Contract 3) ────────────────────────────────────
+let _offscreen = null;
+
 // Canvas-position fractions for each of the 8 gradient stops (top → bottom)
 const STOP_POSITIONS = [0.00, 0.12, 0.25, 0.40, 0.58, 0.70, 0.83, 1.00];
 
@@ -253,15 +256,16 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
     canvas.height = h;
   }
 
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, w, h);
+  // ── Contract 3: Offscreen commit — draw to buffer, then atomic blit ─────
+  if (!_offscreen || _offscreen.width !== w || _offscreen.height !== h) {
+    _offscreen = document.createElement('canvas');
+    _offscreen.width = w;
+    _offscreen.height = h;
+  }
+  const off = _offscreen.getContext('2d');
+  off.clearRect(0, 0, w, h);
 
   // ── Sample atmosphere at 8 elevation offsets ──────────────────────────────
-  // Each stop samples a different effective elevation (sunAngle + offset), but
-  // the perceptual tuning pass (Phase 7) uses the REAL sun elevation — the
-  // "sunset mood" is set by where the sun actually is, not by where the stop
-  // is looking. At PERCEPTUAL_BOOST=0 (shipping default) the tuning call is a
-  // byte-identical no-op that short-circuits on the first line.
   const colors = STOP_OFFSETS_RAD.map((offset, i) => {
     const sampleAngle = sunAngle_rad + offset;
     const atm  = computeAtmosphere(sampleAngle, turbidity, angstromExp, LOCATION_CLIMATE.ozoneDU, clouds, mieGrowth);
@@ -285,44 +289,18 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
   });
 
   // ── Saturation boost ──────────────────────────────────────────────────────
-  // `mix-blend-mode: hue` needs saturated source colours to register —
-  // the physics returns pale pastels (s ≈ 0.08–0.18) whose HUE angle
-  // carries the time-of-day signal but whose low saturation is ignored
-  // by the blend. Boost every stop up to a target saturation.
-  //
-  // The boost is strongest during twilight and weakest at high sun:
-  // at noon the physics hue for the horizon zone still carries a warm
-  // tint (it's the part of the sky nearest the solar disk), but we
-  // don't want a dramatic sunset look at midday. Elevation ≥ 12° →
-  // target saturation 0.30 (subtle); elevation ≤ 2° → target 0.75
-  // (full dramatic); smooth ramp in between.
   const elevDeg = sunAngle_rad * 180 / Math.PI;
   const boostT  = Math.max(0, Math.min(1, (12 - elevDeg) / 10));
-  const targetS = 0.30 + 0.45 * boostT;  // 0.30 → 0.75
+  const targetS = 0.30 + 0.45 * boostT;
 
   // ── Horizon correction ────────────────────────────────────────────────────
-  // When the sun is just below the horizon (0° → −4°) the Mie scattering
-  // residual is still warm-orange. boostSaturation would amplify that warmth
-  // to targetS=0.75 before the night anchor fires. Cap it here to prevent
-  // a brown flash in the 0° → −1° window.
-  const horizonCorrection = Math.max(0, Math.min(1, -elevDeg / 4)); // 0 at 0°, 1 at −4°
+  const horizonCorrection = Math.max(0, Math.min(1, -elevDeg / 4));
   const effectiveTargetS  = targetS * (1 - horizonCorrection * 0.35);
 
   // ── Night indigo anchor ───────────────────────────────────────────────────
-  // Physics at night yields warm-brown (ozone + high air-mass warmth).
-  // boostSaturation amplifies it, then hue blend rotates the photo brown.
-  // Blend all stops toward deep indigo BEFORE saturation boost so the hue
-  // blend fires blue-violet instead of brown at night.
-  //
-  // Color: HSL 264° (violet-indigo), S=0.77, L=0.17 — deep natural real-sky tone,
-  // shifted toward pure violet (270°) to eliminate warm-brown residuals at dusk.
-  //
-  // Ramp: smoothstep(0, 1, t) for a completely jump-free S-curve transition.
-  //   elevDeg > −1°  → anchor = 0.0  (pure physics, twilight and above)
-  //   elevDeg < −21° → anchor = 1.0  (full violet-indigo, deep night)
-  const NIGHT_INDIGO   = { r: 18, g: 10, b: 78 }; // HSL ≈ 264°, deep violet-indigo
+  const NIGHT_INDIGO   = { r: 18, g: 10, b: 78 };
   const _nRaw          = Math.max(0, Math.min(1, (-elevDeg - 1) / 20));
-  const nightAnchorStr = _nRaw * _nRaw * (3 - 2 * _nRaw); // smoothstep
+  const nightAnchorStr = _nRaw * _nRaw * (3 - 2 * _nRaw);
   const anchoredColors = nightAnchorStr > 0
     ? colors.map(c => ({
         r: Math.round(c.r + (NIGHT_INDIGO.r - c.r) * nightAnchorStr),
@@ -333,22 +311,24 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
 
   const saturated = anchoredColors.map(c => boostSaturation(c, effectiveTargetS));
 
-  // ── Build vertical gradient ───────────────────────────────────────────────
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  // ── Build vertical gradient on offscreen buffer ───────────────────────────
+  const grad = off.createLinearGradient(0, 0, 0, h);
   STOP_POSITIONS.forEach((pos, i) => {
     grad.addColorStop(pos, rgba(saturated[i], STOP_ALPHAS[i]));
   });
 
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
+  off.fillStyle = grad;
+  off.fillRect(0, 0, w, h);
 
   // ── Clip to sky mask ──────────────────────────────────────────────────────
-  // Cut the gradient down to only the sky pixels of background.jpg.
-  // destination-in keeps the gradient only where the mask alpha is non-zero.
-  // The First Frame Freeze guard at the top guarantees the mask is ready here.
-  ctx.globalCompositeOperation = 'destination-in';
-  drawSkyMask(ctx, w, h);
-  ctx.globalCompositeOperation = 'source-over';
+  off.globalCompositeOperation = 'destination-in';
+  drawSkyMask(off, w, h);
+  off.globalCompositeOperation = 'source-over';
+
+  // ── COMMIT: atomic blit to visible canvas ─────────────────────────────────
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(_offscreen, 0, 0, w, h);
 }
 
 /**

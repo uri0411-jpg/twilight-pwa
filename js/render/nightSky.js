@@ -33,6 +33,12 @@ let _starCanvas = null, _starW = 0, _starH = 0, _starDPR = 1;
 // Rather than draw unclipped stars over mountains, we defer: save the call
 // args here and re-invoke as soon as loadSkyMask() resolves (usually < 100 ms).
 let _pendingRenderArgs = null;
+let _maskFailed = false; // Contract 3: permanent mask failure flag
+
+// ── Offscreen commit buffer (Contract 3) ────────────────────────────────────
+// All draw operations target this buffer. Only after full success is the
+// content atomically committed to the visible canvas via a single drawImage.
+let _offscreen = null;
 
 // Pre-load mask at module evaluation time so it's ready before the first tick.
 loadSkyMask()
@@ -43,7 +49,12 @@ loadSkyMask()
       renderNightSky(container, nightFactor, date);
     }
   })
-  .catch(() => {}); // mask failure is non-fatal — stars simply remain unclipped
+  .catch(() => {
+    _maskFailed = true;
+    _pendingRenderArgs = null;
+    console.warn('[nightSky] sky mask load failed — stars disabled');
+    if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.renderFails++;
+  });
 
 // ── Seeded star field ─────────────────────────────────────────────────────────
 // Fixed positions (same stars every night — perceptual stability).
@@ -165,85 +176,82 @@ export function renderNightSky(container, nightFactor, date) {
     canvas.height = _ch = h;
   }
 
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, w, h);
+  // ── Mask readiness check ─────────────────────────────────────────────────
+  const mask = getSkyMaskSync();
+  if (!mask) {
+    if (_maskFailed) {
+      if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.renderFails++;
+      return; // mask failed permanently — skip render entirely
+    }
+    _pendingRenderArgs = { container, nightFactor, date };
+    return; // mask still loading — defer (offscreen not committed = no partial frame)
+  }
+
+  // ── Contract 3: Offscreen commit — draw everything to buffer first ──────
+  if (!_offscreen || _offscreen.width !== w || _offscreen.height !== h) {
+    _offscreen = document.createElement('canvas');
+    _offscreen.width = w;
+    _offscreen.height = h;
+  }
+  const off = _offscreen.getContext('2d');
+  off.clearRect(0, 0, w, h);
 
   // ── Stars — single drawImage from pre-rendered offscreen canvas ───────────────
-  // nightFactor * (0.6 + 0.4*nightFactor): 0.6 floor gives early kick-in during
-  // civil twilight before sky is fully dark, matching real visual experience.
-  // Per-star opacity tiers are baked into the offscreen canvas; only the shared
-  // scale factor changes per tick, so the blend path is a single composited blit.
   const starC = _buildStarCanvas(w, h);
-  if (!starC || starC.width <= 0 || starC.height <= 0) return; // guard: skip if star canvas has no area
-  ctx.globalAlpha = nightFactor * (0.6 + 0.4 * nightFactor);
+  if (!starC || starC.width <= 0 || starC.height <= 0) return;
+  off.globalAlpha = nightFactor * (0.6 + 0.4 * nightFactor);
   try {
-    ctx.drawImage(starC, 0, 0, w, h); // scale back from DPR
+    off.drawImage(starC, 0, 0, w, h);
   } catch (e) {
     console.warn('[nightSky] drawImage failed:', e);
   }
-  ctx.globalAlpha = 1;
+  off.globalAlpha = 1;
 
   // ── Moon ──────────────────────────────────────────────────────────────────
   const moonAge     = moonPhase(date);
-  const phase       = moonAge / 29.530588;  // 0=new, 0.5=full, 1=new again
-
-  // lunarBright: 0 at new moon, 1 at full moon, symmetric for waxing/waning.
-  // sin(phase·π) gives the correct astronomical shape: peaks at full moon
-  // (phase=0.5), zero at new moon (phase=0/1). The previous |2p−1| formula
-  // incorrectly peaked at half-moon and under-lit the full moon.
+  const phase       = moonAge / 29.530588;
   const lunarBright = Math.sin(phase * Math.PI);
-
-  // Moon opacity: dim at new moon, bright at full moon, scaled by night depth.
   const finalMoonOp = Math.min(0.92, (0.1 + lunarBright * 0.85) * nightFactor);
 
   if (finalMoonOp > 0.02) {
     const moonR = 18;
-    const moonX = w * 0.72;   // upper-right sky zone
+    const moonX = w * 0.72;
     const moonY = h * 0.12;
 
-    // Draw full moon disk with warm-white glow
-    ctx.globalAlpha = finalMoonOp;
-    ctx.fillStyle   = '#FFF8E6';
-    ctx.shadowColor = 'rgba(255,245,210,0.6)';
-    ctx.shadowBlur  = 14;
-    ctx.beginPath();
-    ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    off.globalAlpha = finalMoonOp;
+    off.fillStyle   = '#FFF8E6';
+    off.shadowColor = 'rgba(255,245,210,0.6)';
+    off.shadowBlur  = 14;
+    off.beginPath();
+    off.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+    off.fill();
+    off.shadowBlur = 0;
 
-    // Soft terminator: radial gradient + destination-out cuts the shadow side
-    // with a smooth edge rather than a hard geometric clip.
     if (lunarBright < 0.97) {
-      // termX shifts left (waning) or right (waxing) based on phase angle
       const termX = moonX + Math.cos(phase * 2 * Math.PI) * moonR * 0.9;
-      const grad  = ctx.createRadialGradient(termX, moonY, 0, termX, moonY, moonR * 1.4);
+      const grad  = off.createRadialGradient(termX, moonY, 0, termX, moonY, moonR * 1.4);
       grad.addColorStop(0,   'rgba(0,0,0,0.95)');
       grad.addColorStop(0.6, 'rgba(0,0,0,0.6)');
       grad.addColorStop(1,   'rgba(0,0,0,0)');
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(moonX, moonY, moonR * 1.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalCompositeOperation = 'source-over';
+      off.globalCompositeOperation = 'destination-out';
+      off.fillStyle = grad;
+      off.beginPath();
+      off.arc(moonX, moonY, moonR * 1.6, 0, Math.PI * 2);
+      off.fill();
+      off.globalCompositeOperation = 'source-over';
     }
   }
 
   // ── Clip to sky mask ──────────────────────────────────────────────────────
-  // Stars and moon must not appear on mountains, trees, or dark ground silhouettes.
-  // Guard: if the mask hasn't resolved yet, save call args and clear the canvas
-  // (no unclipped stars). The module-level loadSkyMask().then() re-invokes us
-  // the instant the mask is ready (typically < 100 ms after first load).
-  const mask = getSkyMaskSync();
-  if (!mask) {
-    _pendingRenderArgs = { container, nightFactor, date };
-    ctx.clearRect(0, 0, w, h);
-    return;
-  }
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'destination-in';
-  drawSkyMask(ctx, w, h);
-  ctx.globalCompositeOperation = 'source-over';
+  off.globalAlpha = 1;
+  off.globalCompositeOperation = 'destination-in';
+  drawSkyMask(off, w, h);
+  off.globalCompositeOperation = 'source-over';
+
+  // ── COMMIT: atomic blit to visible canvas ─────────────────────────────────
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(_offscreen, 0, 0, w, h);
 }
 
 /**

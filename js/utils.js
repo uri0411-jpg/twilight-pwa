@@ -727,3 +727,13 @@ export function scoreToLuminousBarStyle(score, skyColors) {
   return { gradient: bg.gradient, glassGradient: scoreColor, scoreColor, scoreColorRgb, scoreGlow, shimmer };
 }
 export { scoreToLuminousBarStyle as scoreToBarStyle };
+
+// ── Contract 5 — Deep immutability for state snapshots ──────────────────
+export function deepFreeze(obj) {
+  if (obj == null || typeof obj !== 'object' || Object.isFrozen(obj)) return obj;
+  Object.freeze(obj);
+  for (const val of Object.values(obj)) {
+    if (typeof val === 'object' && val !== null) deepFreeze(val);
+  }
+  return obj;
+}

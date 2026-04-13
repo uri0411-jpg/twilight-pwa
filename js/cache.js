@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════
 
 const PREFIX = 'twl_';
+const CACHE_VERSION = 1; // Contract 5: bump to invalidate all cached entries
 
 /**
  * Store data with TTL
@@ -11,6 +12,7 @@ const PREFIX = 'twl_';
  */
 export function setCache(key, data, ttlMin) {
   const entry = {
+    _v: CACHE_VERSION,
     data,
     created: Date.now(),
     expires: Date.now() + ttlMin * 60 * 1000
@@ -42,6 +44,12 @@ export function getCache(key) {
     const raw = localStorage.getItem(PREFIX + key);
     if (!raw) return null;
     const entry = JSON.parse(raw);
+    // Contract 5: hard reject on version mismatch
+    if (entry._v !== CACHE_VERSION) {
+      localStorage.removeItem(PREFIX + key);
+      if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.cacheRejects++;
+      return null;
+    }
     if (Date.now() > entry.expires) {
       localStorage.removeItem(PREFIX + key);
       return null;
@@ -59,7 +67,14 @@ export function getStaleCache(key) {
   try {
     const raw = localStorage.getItem(PREFIX + key);
     if (!raw) return null;
-    return JSON.parse(raw).data ?? null;
+    const entry = JSON.parse(raw);
+    // Contract 5: hard reject on version mismatch
+    if (entry._v !== CACHE_VERSION) {
+      localStorage.removeItem(PREFIX + key);
+      if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.cacheRejects++;
+      return null;
+    }
+    return entry.data ?? null;
   } catch (e) {
     return null;
   }
@@ -124,6 +139,12 @@ export function getStaleCacheWithAge(key) {
     const raw = localStorage.getItem(PREFIX + key);
     if (!raw) return null;
     const entry = JSON.parse(raw);
+    // Contract 5: hard reject on version mismatch
+    if (entry._v !== CACHE_VERSION) {
+      localStorage.removeItem(PREFIX + key);
+      if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.cacheRejects++;
+      return null;
+    }
     if (!entry.data) return null;
     const ageMinutes = entry.created ? Math.round((Date.now() - entry.created) / 60000) : null;
     const isExpired = Date.now() > entry.expires;

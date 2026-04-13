@@ -233,8 +233,9 @@ function startLiveGradient(today, loc) {
           clouds:         cloudFractionsFor(today),
           mieGrowth:      today.mieGrowthFactor ?? 1,
         });
-      } catch (_) {
-        // Silently fall back to pre-computed skyColors
+      } catch (err) {
+        if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.renderFails++;
+        console.warn('[render] computeSkyColor failed:', err?.message);
       }
     }
 
@@ -285,55 +286,61 @@ function startLiveGradient(today, loc) {
 
     const nf = getNightFactor(liveElevDeg);
 
-    // ── Render side-effects (isolated try-catch) ───────────────────────────
+    // ── Render side-effects — Contract 3: isolated stages ──────────────────
+    // Each render stage is wrapped in its own try/catch so a failure in one
+    // (e.g. nightSky) does not block others (skyCanvas, sunDisk, rays).
+    // Each canvas render uses offscreen commit (Contract 3) so no partial frames.
     if (!isReady) return; // canvas not laid out yet — skip render
 
+    // Stage 1: Background filter
     try {
-      // Score-driven photo mood: saturate + brightness of the background photo
-      // reflects the day's forecast quality so the scene matches the prediction.
-      //   score 8–10 → full vivid photo (sat 1.0, bright 1.0)
-      //   score 5–7  → muted pastel  (sat 0.45, bright 0.82)
-      //   score 0–4  → near-grey     (sat 0.08, bright 0.62)
-      // Smooth lerp between tiers so there are no hard jumps.
       const bgEl = document.querySelector('.bg-sunset');
       if (bgEl) {
-        const s = displayScore / 10; // 0..1
+        const s = displayScore / 10;
         const sat   = s >= 0.8 ? 1.0
                     : s >= 0.5 ? 0.45 + (s - 0.5) / 0.3 * 0.55
                     :            0.08 + (s / 0.5) * 0.37;
         const brite = s >= 0.8 ? 1.0
                     : s >= 0.5 ? 0.82 + (s - 0.5) / 0.3 * 0.18
                     :            0.62 + (s / 0.5) * 0.20;
-
-        // Night dimming: fade photo toward dark below civil twilight (−6°).
-        // min brightness: 0.18–0.25 keeps the hue-blend signal alive even at deep night.
         const nightBrite = 1 - nf * 0.65;
         const minBrite   = 0.18 + 0.07 * (1 - nf);
         const finalBrite = Math.max(minBrite, brite * nightBrite);
         bgEl.style.filter = `saturate(${sat.toFixed(2)}) brightness(${finalBrite.toFixed(2)})`;
       }
+    } catch (e) {
+      console.warn('[render] bg filter:', e.message);
+      if (window.__twl_debug) window.__twl_debug.renderFails++;
+    }
 
-      // Night sky: stars + moon when sun is below civil twilight.
-      // 0.02 hysteresis threshold prevents add/remove flicker at the boundary.
+    // Stage 2: Night sky (stars + moon)
+    try {
       const skyLayersNight = document.getElementById('sky-layers');
       if (nf > 0.02) {
         renderNightSky(skyLayersNight, nf, new Date());
       } else {
         removeNightSky(skyLayersNight);
       }
+    } catch (e) {
+      console.warn('[render] nightSky:', e.message);
+      if (window.__twl_debug) window.__twl_debug.renderFails++;
+    }
 
-      // Night vision: auto-engage when sun is below -2° and screen open > 2 min
+    // Stage 3: Night vision toggle
+    try {
       const nvActive = liveElevDeg < -2 && (Date.now() - _screenOpenTime) > 120_000;
       document.body.classList.toggle('night-vision', nvActive);
       const nvIndicator = document.getElementById('nv-indicator');
       if (nvIndicator) nvIndicator.style.display = nvActive ? 'block' : 'none';
+    } catch (e) {
+      console.warn('[render] nightVision:', e.message);
+      if (window.__twl_debug) window.__twl_debug.renderFails++;
+    }
 
-      // Canvas + sun disk + crepuscular rays — rendered into #sky-layers so the
-      // canvas's `mix-blend-mode: soft-light` and the sun's `mix-blend-mode:
-      // screen` both blend against the root backdrop (.bg-sunset + the canvas
-      // that just painted), not against a nested stacking context.
-      const skyLayers = document.getElementById('sky-layers');
-      if (skyLayers) {
+    // Stage 4: Sky canvas + sun disk + crepuscular rays
+    const skyLayers = document.getElementById('sky-layers');
+    if (skyLayers) {
+      try {
         renderSkyCanvas(
           skyLayers,
           liveElevDeg * (Math.PI / 180),
@@ -343,8 +350,13 @@ function startLiveGradient(today, loc) {
           cloudFractionsFor(today),
           today.mieGrowthFactor ?? 1,
         );
+      } catch (e) {
+        console.warn('[render] skyCanvas:', e.message);
+        if (window.__twl_debug) window.__twl_debug.renderFails++;
+      }
 
-        if (today._solarAzimuth != null) {
+      if (today._solarAzimuth != null) {
+        try {
           renderSunDisk(skyLayers, {
             solarElevation: liveElevDeg,
             solarAzimuth:   today._solarAzimuth,
@@ -353,14 +365,20 @@ function startLiveGradient(today, loc) {
             humidity:       today._humidityRaw ?? 50,
             airMass:        liveAirmass,
           });
+        } catch (e) {
+          console.warn('[render] sunDisk:', e.message);
+          if (window.__twl_debug) window.__twl_debug.renderFails++;
+        }
 
+        try {
           const crepProb = today.scoreEngine?.crepuscularRays ?? 0;
           renderCrepuscularRays(skyLayers, crepProb, today._solarAzimuth,
             /* sunY approx from elevation */ 65 - liveElevDeg * 1.8);
+        } catch (e) {
+          console.warn('[render] crepRays:', e.message);
+          if (window.__twl_debug) window.__twl_debug.renderFails++;
         }
       }
-    } catch (e) {
-      console.warn('[liveGradient] render error:', e);
     }
   }
 
@@ -473,7 +491,11 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
   // the live gradient. Soft timeout (300ms) prevents blocking on slow networks;
   // First Frame Freeze in skyCanvas.js acts as safety net if timeout fires early.
   const bgPromise   = ensureBackgroundReady();
-  const maskPromise = loadSkyMask().catch(() => null);
+  const maskPromise = loadSkyMask().catch(e => {
+    console.warn('[main] sky mask load failed:', e?.message);
+    if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.renderFails++;
+    return null;
+  });
 
   await Promise.race([
     Promise.all([bgPromise, maskPromise]),
