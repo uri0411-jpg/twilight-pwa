@@ -100,12 +100,30 @@ export async function fetchWeekFast(lat, lon, force = false) {
   const ttl  = getWeatherTTL();
 
   if (force) {
-    return fetchWithDedup(key, async () => {
-      const data = await fetchModel(zone.repLat, zone.repLon);
-      data._modelCount = 1;
-      setCache(key, data, ttl);
-      return data;
-    });
+    try {
+      return await fetchWithDedup(key, async () => {
+        const data = await fetchModel(zone.repLat, zone.repLon);
+        data._modelCount = 1;
+        setCache(key, data, ttl);
+        return data;
+      });
+    } catch (err) {
+      // Stale fallback — zone key first, legacy coord key second
+      const stale = getStaleCache(key);
+      if (stale) {
+        console.warn('[api] fetchWeekFast: force fetch failed, using stale zone cache');
+        stale._isStale = true;
+        return stale;
+      }
+      const legacyKey = `weather_${lat.toFixed(3)}_${lon.toFixed(3)}`;
+      const legacy = getStaleCache(legacyKey);
+      if (legacy) {
+        console.warn('[api] fetchWeekFast: force fetch failed, using legacy stale cache');
+        legacy._isStale = true;
+        return legacy;
+      }
+      throw err;
+    }
   }
 
   const result = swr(key, async () => {
@@ -249,6 +267,18 @@ async function _fetchAirQualityRaw(lat, lon) {
   }
 }
 
+// Hebrew name overrides for settlements that Nominatim returns in English/Arabic
+const _HEBREW_NAME_OVERRIDES = {
+  'Efrat': 'אפרת', 'Beitar Illit': 'ביתר עילית', 'Kiryat Arba': 'קרית ארבע',
+  "Giv'at Ze'ev": 'גבעת זאב', 'Givat Zeev': 'גבעת זאב',
+  "Beit El": 'בית אל', 'Eli': 'עלי', 'Shilo': 'שילה', 'Ofra': 'עופרה',
+  'Kedumim': 'קדומים', 'Elkana': 'אלקנה', 'Immanuel': 'עמנואל',
+  'Karnei Shomron': 'קרני שומרון', 'Barkan': 'ברקן',
+  "Beit Aryeh": 'בית אריה', 'Adam': 'גבע בנימין', 'Tekoa': 'תקוע',
+  'Hashmonaim': 'חשמונאים', "Ma'ale Adumim": 'מעלה אדומים',
+  'Ariel': 'אריאל', 'Gush Etzion': 'גוש עציון',
+};
+
 /**
  * Reverse-geocode lat/lon to Hebrew city name via Nominatim
  */
@@ -267,9 +297,11 @@ export async function fetchCityName(lat, lon) {
     });
     if (!res.ok) return 'מיקום לא ידוע';
     const data = await res.json();
-    const city = data.address?.city || data.address?.town
-      || data.address?.village || data.address?.suburb
-      || data.address?.county || data.address?.state || 'ישראל';
+    let city = data.address?.city || data.address?.town
+      || data.address?.village || data.address?.hamlet
+      || data.address?.suburb || data.address?.county
+      || data.address?.state || 'ישראל';
+    city = _HEBREW_NAME_OVERRIDES[city] || city;
     setCache(cacheKey, city, CACHE_TTL.sun);
     return city;
   } catch { return 'מיקום לא ידוע'; }

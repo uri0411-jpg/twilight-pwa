@@ -92,10 +92,11 @@ function _scheduleSpotPreload(weekData, loc) {
 
 // ── Observability (Contract 6) ──────────────────────────────────────────
 window.__twl_debug = window.__twl_debug || {
-  staleDrops:   0,   // isStale blocked a state write
-  renderFails:  0,   // render stage threw an exception
-  cacheMisses:  0,   // cache key not found
-  cacheRejects: 0,   // cache entry deleted due to version mismatch
+  staleDrops:      0,  // isStale blocked a state write
+  renderFails:     0,  // render stage threw an exception
+  cacheMisses:     0,  // cache key not found
+  cacheRejects:    0,  // cache entry deleted due to version mismatch
+  locChangeFails:  0,  // handleSetLocation catch — location change failure
 };
 
 // ─────────────────────────────────────────
@@ -572,9 +573,9 @@ async function handleSetLocation(e) {
   _isRefreshing = true;
   showLoading(true);
   try {
+    const prevLoc = _loc, prevCity = _city;
     _loc  = { lat, lon };
     _city = city || 'מיקום מותאם';
-    saveLocation(lat, lon, _city);
 
     _locGen++;
     const gen = _locGen;
@@ -600,6 +601,7 @@ async function handleSetLocation(e) {
     }
     _weekData = calcWeekData(weather, null, lat, lon, null);
     await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
+    saveLocation(lat, lon, _city); // persist only after successful render
     showLoading(false);
 
     // Enrich with non-critical data
@@ -640,6 +642,10 @@ async function handleSetLocation(e) {
     }
   } catch (err) {
     console.error('[setLocation]', err);
+    // Restore previous state so the app isn't stuck pointing at a failed location
+    _loc = prevLoc;
+    _city = prevCity;
+    if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.locChangeFails++;
     const msg = err?.message === 'EMPTY_WEATHER_DATA'
       ? 'אין נתונים זמינים כרגע'
       : err?.name === 'TypeError' || err?.message?.includes('fetch')

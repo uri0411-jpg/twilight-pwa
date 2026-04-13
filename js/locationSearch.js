@@ -55,6 +55,24 @@ const ISRAEL_CITIES = [
   { name: 'שדרות', aliases: ['sderot'], lat: 31.5227, lon: 34.5962 },
   { name: 'מעלה אדומים', aliases: ['maale adumim'], lat: 31.7781, lon: 35.3084 },
   { name: 'אריאל', aliases: ['ariel'], lat: 32.1050, lon: 35.1741 },
+  { name: 'אפרת', aliases: ['efrat'], lat: 31.6558, lon: 35.1592 },
+  { name: 'ביתר עילית', aliases: ['beitar illit', 'ביתר'], lat: 31.6948, lon: 35.1183 },
+  { name: 'קרית ארבע', aliases: ['kiryat arba'], lat: 31.5266, lon: 35.1184 },
+  { name: 'גבעת זאב', aliases: ['givat zeev'], lat: 31.8614, lon: 35.1741 },
+  { name: 'בית אל', aliases: ['beit el'], lat: 31.9424, lon: 35.2277 },
+  { name: 'עלי', aliases: ['eli'], lat: 32.0773, lon: 35.2645 },
+  { name: 'שילה', aliases: ['shilo'], lat: 32.0551, lon: 35.2901 },
+  { name: 'עופרה', aliases: ['ofra'], lat: 31.9519, lon: 35.2596 },
+  { name: 'קדומים', aliases: ['kedumim'], lat: 32.1713, lon: 35.1612 },
+  { name: 'אלקנה', aliases: ['elkana'], lat: 32.1114, lon: 35.0328 },
+  { name: 'עמנואל', aliases: ['immanuel'], lat: 32.1499, lon: 35.1583 },
+  { name: 'קרני שומרון', aliases: ['karnei shomron'], lat: 32.1731, lon: 35.0935 },
+  { name: 'גוש עציון', aliases: ['gush etzion'], lat: 31.6469, lon: 35.1182 },
+  { name: 'ברקן', aliases: ['barkan'], lat: 32.1234, lon: 35.0907 },
+  { name: 'בית אריה', aliases: ['beit aryeh'], lat: 32.0408, lon: 35.0449 },
+  { name: 'גבע בנימין', aliases: ['geva binyamin', 'adam', 'אדם'], lat: 31.8864, lon: 35.2498 },
+  { name: 'תקוע', aliases: ['tekoa'], lat: 31.6383, lon: 35.2109 },
+  { name: 'חשמונאים', aliases: ['hashmonaim'], lat: 31.9268, lon: 35.0197 },
   { name: 'יפו', aliases: ['jaffa', 'jaffo'], lat: 32.0503, lon: 34.7500 },
   { name: 'הרצליה פיתוח', aliases: ['herzliya pituach'], lat: 32.1639, lon: 34.7752 },
   { name: 'נס ציונה', aliases: ['ness ziona'], lat: 31.9314, lon: 34.7958 },
@@ -144,7 +162,7 @@ async function searchNominatim(query, signal) {
 
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=il&accept-language=he`,
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&viewbox=34.0,33.5,35.9,29.4&bounded=1&accept-language=he`,
       { headers: { 'User-Agent': 'TWILIGHT-PWA/1.0' }, signal: timeoutCtrl.signal }
     );
     if (!res.ok) return [];
@@ -208,6 +226,9 @@ class LocationSearch {
           <svg width="14" height="14" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input class="search-input loc-search-input" type="text" placeholder="${esc(placeholder)}" dir="rtl" autocomplete="off" inputmode="search" enterkeyhint="search" />
         </div>
+        <button class="search-filter-btn loc-search-submit" type="button" title="חפש" style="display:none">
+          <svg width="16" height="16" fill="none" stroke="var(--cream)" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
         ${showCloseButton ? '<button class="search-filter-btn loc-search-close" type="button" title="סגור">✕</button>' : ''}
       </div>
       ${showGpsButton ? `
@@ -220,19 +241,23 @@ class LocationSearch {
       <div class="location-dropdown"></div>
     `;
 
-    this._input    = this._container.querySelector('.loc-search-input');
-    this._dropdown = this._container.querySelector('.location-dropdown');
-    this._closeBtn = this._container.querySelector('.loc-search-close');
-    this._gpsBtn   = this._container.querySelector('.loc-search-gps');
+    this._input     = this._container.querySelector('.loc-search-input');
+    this._dropdown  = this._container.querySelector('.location-dropdown');
+    this._closeBtn  = this._container.querySelector('.loc-search-close');
+    this._gpsBtn    = this._container.querySelector('.loc-search-gps');
+    this._submitBtn = this._container.querySelector('.loc-search-submit');
   }
 
   // ─── Event binding ───
   _attachEvents() {
     const sig = { signal: this._ac.signal };
 
-    // Input — debounced search
+    // Input — debounced search + toggle submit button visibility
     this._input?.addEventListener('input', () => {
       clearTimeout(this._debounceTimer);
+      if (this._submitBtn) {
+        this._submitBtn.style.display = this._input.value.trim().length >= 2 ? 'flex' : 'none';
+      }
       this._debounceTimer = setTimeout(() => this._handleSearch(), 250);
     }, sig);
 
@@ -268,6 +293,12 @@ class LocationSearch {
       }, sig);
     }
 
+    // Search submit button — immediate search, no debounce
+    this._submitBtn?.addEventListener('click', () => {
+      clearTimeout(this._debounceTimer);
+      this._handleSearch();
+    }, sig);
+
     // Outside close — focusout with rAF guard
     this._container.addEventListener('focusout', () => {
       requestAnimationFrame(() => {
@@ -296,8 +327,13 @@ class LocationSearch {
       this._updateHighlight();
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const idx = this._highlightIdx >= 0 ? this._highlightIdx : 0;
-      if (this._currentItems[idx]) this._selectItem(this._currentItems[idx]);
+      if (this._currentItems.length > 0) {
+        const idx = this._highlightIdx >= 0 ? this._highlightIdx : 0;
+        this._selectItem(this._currentItems[idx]);
+      } else if (this._input?.value.trim().length >= 2) {
+        clearTimeout(this._debounceTimer);
+        this._handleSearch();
+      }
     } else if (e.key === 'Escape') {
       this._closeDropdown();
       this._options.onClose?.();

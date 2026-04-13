@@ -671,6 +671,13 @@ body.has-install-banner .screen { padding-top: 56px; }
   align-items: center;
   gap: 8px;
 }
+.loc-search-submit {
+  padding: 8px 10px;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+.loc-search-submit:active {
+  transform: scale(0.92);
+}
 .loc-search-row2 {
   display: flex;
   gap: 8px;
