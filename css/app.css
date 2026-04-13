@@ -675,8 +675,17 @@ body.has-install-banner .screen { padding-top: 56px; }
   padding: 8px 10px;
   transition: opacity 0.15s ease, transform 0.1s ease;
 }
-.loc-search-submit:active {
-  transform: scale(0.92);
+.loc-search-submit:active,
+.loc-search-manual:active {
+  transform: scale(0.96);
+}
+.loc-search-loading {
+  padding: 12px 14px;
+  color: var(--cream-faint);
+  font-size: 13px;
+  font-family: Rubik, sans-serif;
+  direction: rtl;
+  text-align: right;
 }
 .loc-search-row2 {
   display: flex;

@@ -231,21 +231,26 @@ class LocationSearch {
         </button>
         ${showCloseButton ? '<button class="search-filter-btn loc-search-close" type="button" title="סגור">✕</button>' : ''}
       </div>
-      ${showGpsButton ? `
       <div class="loc-search-row2">
+        <button class="search-filter-btn loc-search-btn-wide loc-search-manual" type="button">
+          <svg width="14" height="14" fill="none" stroke="var(--gold-light)" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          חפש מיקום
+        </button>
+        ${showGpsButton ? `
         <button class="search-filter-btn loc-search-btn-wide loc-search-gps" type="button">
           <svg width="14" height="14" fill="var(--gold-light)" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/></svg>
           מיקום נוכחי
-        </button>
-      </div>` : ''}
+        </button>` : ''}
+      </div>
       <div class="location-dropdown"></div>
     `;
 
-    this._input     = this._container.querySelector('.loc-search-input');
-    this._dropdown  = this._container.querySelector('.location-dropdown');
-    this._closeBtn  = this._container.querySelector('.loc-search-close');
-    this._gpsBtn    = this._container.querySelector('.loc-search-gps');
-    this._submitBtn = this._container.querySelector('.loc-search-submit');
+    this._input      = this._container.querySelector('.loc-search-input');
+    this._dropdown   = this._container.querySelector('.location-dropdown');
+    this._closeBtn   = this._container.querySelector('.loc-search-close');
+    this._gpsBtn     = this._container.querySelector('.loc-search-gps');
+    this._submitBtn  = this._container.querySelector('.loc-search-submit');
+    this._manualBtn  = this._container.querySelector('.loc-search-manual');
   }
 
   // ─── Event binding ───
@@ -293,10 +298,19 @@ class LocationSearch {
       }, sig);
     }
 
-    // Search submit button — immediate search, no debounce
+    // Search submit button (icon in row1) — immediate search, no debounce
     this._submitBtn?.addEventListener('click', () => {
       clearTimeout(this._debounceTimer);
       this._handleSearch();
+    }, sig);
+
+    // Manual search button (wide, in row2) — focuses input and triggers search
+    this._manualBtn?.addEventListener('click', () => {
+      this._input?.focus();
+      clearTimeout(this._debounceTimer);
+      if (this._input?.value.trim().length >= 2) {
+        this._handleSearch();
+      }
     }, sig);
 
     // Outside close — focusout with rAF guard
@@ -375,6 +389,8 @@ class LocationSearch {
     if (local.length < 3) {
       if (this._fetchCtrl) this._fetchCtrl.abort();
       this._fetchCtrl = new AbortController();
+      // Show loading indicator while fetching remote
+      if (!local.length) this._showLoading();
       const remote = await searchNominatim(query, this._fetchCtrl.signal);
       if (this._destroyed) return;
       // Only update if input hasn't changed while we waited
@@ -384,6 +400,12 @@ class LocationSearch {
         this._renderDropdown(merged);
       }
     }
+  }
+
+  // ─── Loading indicator ───
+  _showLoading() {
+    this._dropdown.innerHTML = '<div class="loc-search-loading">מחפש...</div>';
+    this._dropdown.classList.add('open');
   }
 
   // ─── Initial suggestions ───
