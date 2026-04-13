@@ -13,7 +13,7 @@ import { initSettingsScreen }                  from './settings-screen.js';
 import { initLearningScreen }                  from './learning-screen.js';
 import { showToast, showLoading }              from './ui.js';
 import { registerSW }                          from './sw-register.js';
-import { clearExpired, getCacheAge, getStaleCacheWithAge, subscribe, isZoneCacheFresh } from './cache.js';
+import { clearExpired, getCacheAge, getStaleCacheWithAge, subscribe as subscribeCache, isZoneCacheFresh } from './cache.js';
 import { recordPrediction, fetchActualForDate, getUnfilledDates, processLearningForEntry } from './calibration.js';
 import { seedFromBacktest, getLearningStats, pinLearningSnapshot }  from './engine/learningEngine.js';
 import { initInstallPrompt }                   from './install-prompt.js';
@@ -21,6 +21,7 @@ import { rearmSavedAlerts }                    from './notifications.js';
 import { initOnboarding }                      from './onboarding.js';
 import { scoreToLabel, distKm, deepFreeze } from './utils.js';
 import { getZoneForCoord } from './zones.js';
+import { getState, setState, bumpLocGen, bumpDataGen, isStale, isDataStale } from './store.js';
 
 // ─────────────────────────────────────────
 //  Score EMA — smooth scores across page loads to reduce noise from
@@ -100,27 +101,9 @@ window.__twl_debug = window.__twl_debug || {
 };
 
 // ─────────────────────────────────────────
-//  State
+//  State — centralised in store.js
+//  Convenience accessors for readability in this file.
 // ─────────────────────────────────────────
-let _weekData = null;
-let _loc      = null;
-let _city     = '';
-let _airQuality      = null;
-let _spotsInitialized    = false;
-let _isRefreshing        = false; // FIX: debounce guard for refresh
-let _locGen              = 0;    // monotonic counter — guards stale async callbacks
-let _bootAborted         = false; // Contract 1: set by boot timeout to abort stale promises
-
-/**
- * Contract 1 — isStale(gen)
- * Unified freshness gate for ALL async continuations.
- * Returns true if the current operation should be aborted.
- */
-function isStale(gen) {
-  const stale = gen !== _locGen || _bootAborted;
-  if (stale) window.__twl_debug.staleDrops++;
-  return stale;
-}
 
 // ─────────────────────────────────────────
 //  Boot
@@ -166,7 +149,7 @@ async function boot() {
   // force an error after 30s instead of infinite loading
   const bootTimeout = new Promise((_, reject) =>
     setTimeout(() => {
-      _bootAborted = true; // Contract 1: abort stale promises after timeout
+      setState({ bootAborted: true }); // Contract 1: abort stale promises after timeout
       reject(new Error('Boot timeout (30s) — בדוק חיבור לאינטרנט'));
     }, 30000)
   );
@@ -203,17 +186,17 @@ async function boot() {
   // loadAppData was running (and the event was queued/dropped), sync now.
   // Uses coordinate mismatch — not isFallback — to detect any state divergence.
   // Contract 1: skip after boot timeout to avoid stale state drift
-  if (!_bootAborted) await syncLocationFromState();
+  if (!getState().bootAborted) await syncLocationFromState();
 
   // ─── Screen change handler ───
   onScreenChange(async (id) => {
-    if (id === 'spots' && !_weekData) {
+    if (id === 'spots' && !getState().weekData) {
       showToast('תחזית עדיין נטענת, המתן רגע...', 'info');
       return;
     }
     if (id === 'spots') {
-      _spotsInitialized = true;
-      await initSpotsScreen(_weekData);
+      setState({ spotsInitialized: true });
+      await initSpotsScreen(getState().weekData);
       repaintScoreColors(); // immediate live sky colors on spots screen
     }
     if (id === 'settings') {
@@ -241,6 +224,7 @@ async function boot() {
 async function syncLocationFromState() {
   const stored = loadLocation();
   if (!stored) return;
+  const _loc = getState().loc;
   if (!_loc || _loc.lat !== stored.lat || _loc.lon !== stored.lon) {
     await handleSetLocation({ detail: stored });
   }
@@ -288,38 +272,39 @@ function _rewireZoneSubscription(lat, lon, gen) {
   if (_unsubWeather) _unsubWeather();
   const zone = getZoneForCoord(lat, lon);
   _currentZoneId = zone.zoneId;
-  _unsubWeather = subscribe(`weather_zone_${zone.zoneId}`, (freshWeather) => {
+  _unsubWeather = subscribeCache(`weather_zone_${zone.zoneId}`, (freshWeather) => {
     if (isStale(gen)) return;
     const locSnap = deepFreeze({ lat, lon });
-    _weekData = _applyScoreEMA(
-      calcWeekData(freshWeather, _airQuality, locSnap.lat, locSnap.lon, null),
+    const weekData = _applyScoreEMA(
+      calcWeekData(freshWeather, getState().airQuality, locSnap.lat, locSnap.lon, null),
       locSnap
     );
-    refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+    setState({ weekData });
+    refreshMainScores(weekData, calcNearbyAvgScore(null, weekData));
     console.log('[swr] background revalidation → UI updated');
   });
 }
 
 async function loadAppData() {
-  _isRefreshing = true; // prevent concurrent handleSetLocation during boot
+  setState({ isRefreshing: true }); // prevent concurrent handleSetLocation during boot
   try {
+  // ── Location resolution (separated from data fetch for clear error messages) ──
   const saved = loadLocation();
   if (saved) {
-    _loc  = saved;
-    _city = saved.city || 'מיקומך';
+    setState({ loc: saved, city: saved.city || 'מיקומך', locationResolved: true });
   } else {
     // Non-blocking GPS: boot immediately with Tel Aviv placeholder (not saved),
     // then refresh automatically when GPS resolves in the background.
-    _loc  = { lat: 32.0853, lon: 34.7818, isFallback: true };
-    _city = 'מאתר מיקום...';
+    setState({ loc: { lat: 32.0853, lon: 34.7818, isFallback: true }, city: 'מאתר מיקום...' });
     getGPS().then(async pos => {
       if (pos.permDenied) {
         showToast('הגישה למיקום נחסמה — ניתן לחפש מיקום ידנית', 'info');
-        _city = 'תל אביב';
+        setState({ city: 'תל אביב', locationResolved: true });
         return;
       }
       if (pos.isFallback) {
         showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
+        setState({ locationResolved: true });
         return;
       }
       if (isStale(gen)) return; // Contract 2: GPS resolved after location changed
@@ -331,15 +316,19 @@ async function loadAppData() {
       }));
     }).catch(() => {
       showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
+      setState({ locationResolved: true });
     });
+    // Mark resolved for fallback — GPS will trigger setLocation event when ready
+    setState({ locationResolved: true });
   }
 
   // Capture location generation + immutable coordinate snapshot.
-  // All awaits below may yield to handleSetLocation which mutates _loc,
-  // so we must use locSnap for all calculations, not the live _loc reference.
-  _locGen++;
-  const gen = _locGen;
-  const locSnap = deepFreeze({ lat: _loc.lat, lon: _loc.lon });
+  // All awaits below may yield to handleSetLocation which mutates loc,
+  // so we must use locSnap for all calculations, not the live state reference.
+  const gen = bumpLocGen();
+  const dg  = bumpDataGen();
+  const { loc } = getState();
+  const locSnap = deepFreeze({ lat: loc.lat, lon: loc.lon });
 
   // ── Subscribe to SWR background revalidation ──
   _rewireZoneSubscription(locSnap.lat, locSnap.lon, gen);
@@ -359,11 +348,13 @@ async function loadAppData() {
   // ── Phase 1: Render with primary weather model ──
   const weather = await weatherPromise;
   if (isStale(gen)) return; // location changed during await — abort
+  if (isDataStale(dg)) return; // newer data fetch started — abort
   if (!weather?.daily?.time?.length || !weather?.hourly?.time?.length) {
     throw new Error('נתוני מזג אוויר ריקים — נסה שוב');
   }
-  _weekData = calcWeekData(weather, null, locSnap.lat, locSnap.lon, null);
-  await initMainScreen({ lat: locSnap.lat, lon: locSnap.lon }, _city, _weekData, null);
+  let weekData = calcWeekData(weather, null, locSnap.lat, locSnap.lon, null);
+  setState({ weekData });
+  await initMainScreen({ lat: locSnap.lat, lon: locSnap.lon }, getState().city, weekData, null);
 
   // Stale-data / offline banner
   if (weather._isStale) {
@@ -373,13 +364,14 @@ async function loadAppData() {
   // ── Phase 2: Enrich with non-critical data (AQ, horizon) ──
   const [airQ, westData] = await Promise.all([aqPromise, westPromise]);
   if (isStale(gen)) return; // location changed during boot — abort stale writes
-  _airQuality = airQ;
+  setState({ airQuality: airQ });
 
   // Recalculate only if we got additional data
   if (airQ || westData) {
-    _weekData = calcWeekData(weather, airQ, locSnap.lat, locSnap.lon, westData);
+    weekData = calcWeekData(weather, airQ, locSnap.lat, locSnap.lon, westData);
+    setState({ weekData });
   }
-  const spotAvgScores = calcNearbyAvgScore(null, _weekData);
+  const spotAvgScores = calcNearbyAvgScore(null, weekData);
 
   // ── Phase 3: Background ensemble refinement ──
   // Only runs if weather was actually fetched fresh (not from cache).
@@ -389,33 +381,35 @@ async function loadAppData() {
   if (wasFreshFetch) {
     fetchWeekEnsemble(locSnap.lat, locSnap.lon, weather, true).then(async refined => {
       if (!refined || isStale(gen)) return;
-      _weekData = _applyScoreEMA(
+      const ensembleData = _applyScoreEMA(
         calcWeekData(refined, airQ, locSnap.lat, locSnap.lon, westData),
         locSnap
       );
-      const freshSpotScores = calcNearbyAvgScore(null, _weekData);
-      refreshMainScores(_weekData, freshSpotScores);
+      setState({ weekData: ensembleData });
+      const freshSpotScores = calcNearbyAvgScore(null, ensembleData);
+      refreshMainScores(ensembleData, freshSpotScores);
       console.log(`[boot] ensemble refinement applied (${refined._modelCount} models)`);
     }).catch(err => console.warn('[boot] ensemble refinement failed:', err.message));
   } else if (weather._isStale) {
     // Offline — apply EMA to whatever we have
-    _weekData = _applyScoreEMA(_weekData, locSnap);
+    weekData = _applyScoreEMA(weekData, locSnap);
+    setState({ weekData });
   }
 
   if (isStale(gen)) return;
-  refreshMainScores(_weekData, spotAvgScores);
+  refreshMainScores(weekData, spotAvgScores);
 
-  _scheduleSpotPreload(_weekData, { lat: locSnap.lat, lon: locSnap.lon });
-  updateThemeColor(_weekData);
+  _scheduleSpotPreload(weekData, { lat: locSnap.lat, lon: locSnap.lon });
+  updateThemeColor(weekData);
 
-  if (_weekData[0]) {
-    recordPrediction(_weekData[0].date, _weekData[0].score, _weekData[0], locSnap.lat, locSnap.lon);
+  if (weekData[0]) {
+    recordPrediction(weekData[0].date, weekData[0].score, weekData[0], locSnap.lat, locSnap.lon);
   }
 
   if (isStale(gen)) return;
   const unfilled = getUnfilledDates();
   if (unfilled.length > 0) {
-    const ssHour = parseInt(_weekData[0]?.sunset?.split(':')[0] || '18', 10);
+    const ssHour = parseInt(weekData[0]?.sunset?.split(':')[0] || '18', 10);
     Promise.allSettled(
       unfilled.slice(0, 3).map(dt =>
         fetchActualForDate(dt, locSnap.lat, locSnap.lon, ssHour)
@@ -433,16 +427,16 @@ async function loadAppData() {
   if (saved && !saved.city) {
     fetchCityName(locSnap.lat, locSnap.lon).then(city => {
       if (isStale(gen)) return; // Contract 2: revalidate before state write
-      _city = city;
+      setState({ city });
       saveLocation(locSnap.lat, locSnap.lon, city);
     }).catch(e => console.warn('[boot] city name fetch failed:', e.message));
   }
 
   } finally {
-    _isRefreshing = false;
+    setState({ isRefreshing: false });
     // Drain queued location if GPS resolved during boot
     // Contract 1: skip drain after boot timeout to avoid cascading stale loads
-    if (_pendingLocation && !_bootAborted) {
+    if (_pendingLocation && !getState().bootAborted) {
       const pending = _pendingLocation;
       _pendingLocation = null;
       handleSetLocation({ detail: pending });
@@ -457,9 +451,8 @@ async function loadAppData() {
 //  (GPS button in location search bar).
 // ─────────────────────────────────────────
 async function handleRefresh(e) {
-  if (_isRefreshing) return;
-  _isRefreshing = true;
-  _bootAborted = false; // Contract 1: reset abort flag on intentional refresh
+  if (getState().isRefreshing) return;
+  setState({ isRefreshing: true, bootAborted: false }); // Contract 1: reset abort flag
   showLoading(true);
   try {
     // Re-detect GPS only when explicitly requested (GPS button).
@@ -469,20 +462,20 @@ async function handleRefresh(e) {
       const freshLoc = await getGPS();
       if (freshLoc.permDenied) {
         showToast('הגישה למיקום נחסמה — שנה בהגדרות הדפדפן', 'error');
-        // Continue refresh with existing _loc
+        // Continue refresh with existing loc
       } else if (!freshLoc.isFallback) {
-        _loc  = freshLoc;
-        _city = await fetchCityName(freshLoc.lat, freshLoc.lon);
-        saveLocation(freshLoc.lat, freshLoc.lon, _city);
+        const city = await fetchCityName(freshLoc.lat, freshLoc.lon);
+        setState({ loc: freshLoc, city });
+        saveLocation(freshLoc.lat, freshLoc.lon, city);
       } else {
-        _city = 'תל אביב';
+        setState({ city: 'תל אביב' });
         showToast('לא ניתן לאתר מיקום — מציג תחזית לתל אביב', 'info');
       }
     }
 
-    _locGen++;
-    const gen = _locGen;
-    const lat = _loc.lat, lon = _loc.lon;
+    const gen = bumpLocGen();
+    const { loc } = getState();
+    const lat = loc.lat, lon = loc.lon;
 
     // Rewire SWR subscription to the (possibly new) zone
     _rewireZoneSubscription(lat, lon, gen);
@@ -503,37 +496,40 @@ async function handleRefresh(e) {
     if (!weather?.daily?.time?.length || !weather?.hourly?.time?.length) {
       throw new Error('EMPTY_WEATHER_DATA');
     }
-    _weekData = calcWeekData(weather, null, lat, lon, null);
-    await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
+    let weekData = calcWeekData(weather, null, lat, lon, null);
+    setState({ weekData });
+    await initMainScreen(getState().loc, getState().city, weekData, calcNearbyAvgScore(null, weekData));
     showLoading(false);
 
     // Enrich with non-critical data
     const [airQ, westData] = await Promise.all([aqPromise, westPromise]);
     if (isStale(gen)) return;
-    _airQuality = airQ;
+    setState({ airQuality: airQ });
     if (airQ || westData) {
-      _weekData = _applyScoreEMA(
+      weekData = _applyScoreEMA(
         calcWeekData(weather, airQ, lat, lon, westData),
         { lat, lon }
       );
-      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+      setState({ weekData });
+      refreshMainScores(weekData, calcNearbyAvgScore(null, weekData));
     }
 
     // Background ensemble refinement (force=true → always a fresh fetch)
     fetchWeekEnsemble(lat, lon, weather, true).then(refined => {
       if (!refined || isStale(gen)) return;
-      _weekData = _applyScoreEMA(
+      const ensembleData = _applyScoreEMA(
         calcWeekData(refined, airQ, lat, lon, westData),
         { lat, lon }
       );
-      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+      setState({ weekData: ensembleData });
+      refreshMainScores(ensembleData, calcNearbyAvgScore(null, ensembleData));
     }).catch(err => console.warn('[refresh] ensemble failed:', err.message));
 
     showToast('נתונים עודכנו', 'success');
 
-    _spotsInitialized = false;
+    setState({ spotsInitialized: false });
     invalidatePreloadedSpots();
-    _scheduleSpotPreload(_weekData, _loc);
+    _scheduleSpotPreload(weekData, getState().loc);
   } catch (err) {
     console.error('[refresh]', err);
     const msg = err?.message === 'EMPTY_WEATHER_DATA'
@@ -544,7 +540,7 @@ async function handleRefresh(e) {
     showToast(msg, 'error');
   } finally {
     showLoading(false);
-    _isRefreshing = false;
+    setState({ isRefreshing: false });
     // Drain queued location if one arrived while we were refreshing
     if (_pendingLocation) {
       const pending = _pendingLocation;
@@ -564,21 +560,19 @@ let _pendingLocation = null; // queued location while refresh is in progress
 async function handleSetLocation(e) {
   const { lat, lon, city } = e.detail || {};
   if (!lat || !lon) return;
-  _bootAborted = false; // Contract 1: reset abort flag on intentional location change
-  if (_isRefreshing) {
+  setState({ bootAborted: false }); // Contract 1: reset abort flag on intentional location change
+  if (getState().isRefreshing) {
     // Queue — will be processed when current refresh completes (see finally block)
     _pendingLocation = e.detail;
     return;
   }
-  _isRefreshing = true;
+  setState({ isRefreshing: true });
   showLoading(true);
   try {
-    const prevLoc = _loc, prevCity = _city;
-    _loc  = { lat, lon };
-    _city = city || 'מיקום מותאם';
+    const prevLoc = getState().loc, prevCity = getState().city;
+    setState({ loc: { lat, lon }, city: city || 'מיקום מותאם', locationResolved: true });
 
-    _locGen++;
-    const gen = _locGen;
+    const gen = bumpLocGen();
 
     // Rewire SWR subscription to the new zone
     _rewireZoneSubscription(lat, lon, gen);
@@ -600,53 +594,56 @@ async function handleSetLocation(e) {
     if (!weather?.daily?.time?.length || !weather?.hourly?.time?.length) {
       throw new Error('EMPTY_WEATHER_DATA');
     }
-    _weekData = calcWeekData(weather, null, lat, lon, null);
-    await initMainScreen(_loc, _city, _weekData, calcNearbyAvgScore(null, _weekData));
-    saveLocation(lat, lon, _city); // persist only after successful render
+    let weekData = calcWeekData(weather, null, lat, lon, null);
+    setState({ weekData });
+    const st = getState();
+    await initMainScreen(st.loc, st.city, weekData, calcNearbyAvgScore(null, weekData));
+    saveLocation(lat, lon, st.city); // persist only after successful render
     showLoading(false);
 
     // Enrich with non-critical data
     const [airQ, westData] = await Promise.all([aqPromise, westPromise]);
     if (isStale(gen)) return;
-    _airQuality = airQ;
+    setState({ airQuality: airQ });
     if (airQ || westData) {
-      _weekData = _applyScoreEMA(
+      weekData = _applyScoreEMA(
         calcWeekData(weather, airQ, lat, lon, westData),
         { lat, lon }
       );
-      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+      setState({ weekData });
+      refreshMainScores(weekData, calcNearbyAvgScore(null, weekData));
     }
 
     // Background ensemble refinement — only if weather was actually fetched (not from cache)
     const wasFresh = !weather._isStale && weather._modelCount === 1;
     wasFresh && fetchWeekEnsemble(lat, lon, weather, true).then(refined => {
       if (!refined || isStale(gen)) return;
-      _weekData = _applyScoreEMA(
+      const ensembleData = _applyScoreEMA(
         calcWeekData(refined, airQ, lat, lon, westData),
         { lat, lon }
       );
-      refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
+      setState({ weekData: ensembleData });
+      refreshMainScores(ensembleData, calcNearbyAvgScore(null, ensembleData));
     }).catch(err => console.warn('[setLocation] ensemble failed:', err.message));
 
-    updateThemeColor(_weekData);
-    showToast(`מיקום עודכן: ${_city}`, 'success');
+    updateThemeColor(weekData);
+    showToast(`מיקום עודכן: ${getState().city}`, 'success');
 
     invalidatePreloadedSpots();
-    _scheduleSpotPreload(_weekData, _loc);
+    _scheduleSpotPreload(weekData, getState().loc);
 
     // If spots screen is currently active, re-init it with fresh forecast.
     // Reset flag first to prevent double-init on next tab switch.
-    const wasActive = _spotsInitialized;
-    _spotsInitialized = false;
+    const wasActive = getState().spotsInitialized;
+    setState({ spotsInitialized: false });
     if (wasActive) {
-      _spotsInitialized = true;
-      await initSpotsScreen(_weekData);
+      setState({ spotsInitialized: true });
+      await initSpotsScreen(weekData);
     }
   } catch (err) {
     console.error('[setLocation]', err);
     // Restore previous state so the app isn't stuck pointing at a failed location
-    _loc = prevLoc;
-    _city = prevCity;
+    setState({ loc: prevLoc, city: prevCity });
     if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.locChangeFails++;
     const msg = err?.message === 'EMPTY_WEATHER_DATA'
       ? 'אין נתונים זמינים כרגע'
@@ -656,7 +653,7 @@ async function handleSetLocation(e) {
     showToast(msg, 'error');
   } finally {
     showLoading(false);
-    _isRefreshing = false;
+    setState({ isRefreshing: false });
     // Drain queued location if one arrived while we were refreshing
     if (_pendingLocation) {
       const pending = _pendingLocation;
@@ -677,14 +674,15 @@ function handleVisibilityChange() {
   if (document.hidden) {
     _lastVisible = Date.now();
   } else {
-    const zone = _loc ? getZoneForCoord(_loc.lat, _loc.lon) : null;
+    const { loc } = getState();
+    const zone = loc ? getZoneForCoord(loc.lat, loc.lon) : null;
 
     // Contract 4: Zone transition requires debounce + distance
     let zoneChanged = false;
     if (zone && _currentZoneId && zone.zoneId !== _currentZoneId) {
       const timeSince = Date.now() - _lastZoneRefreshMs;
       const dist = (_lastZoneRefreshLat != null)
-        ? distKm(_loc.lat, _loc.lon, _lastZoneRefreshLat, _lastZoneRefreshLon)
+        ? distKm(loc.lat, loc.lon, _lastZoneRefreshLat, _lastZoneRefreshLon)
         : Infinity;
 
       zoneChanged = timeSince >= ZONE_DEBOUNCE_MS && dist >= ZONE_MIN_DIST_KM;
@@ -697,8 +695,8 @@ function handleVisibilityChange() {
     if (zoneChanged || (zone && !isZoneCacheFresh(zone.zoneId))) {
       if (zoneChanged) {
         _lastZoneRefreshMs = Date.now();
-        _lastZoneRefreshLat = _loc.lat;
-        _lastZoneRefreshLon = _loc.lon;
+        _lastZoneRefreshLat = loc.lat;
+        _lastZoneRefreshLon = loc.lon;
       }
       handleRefresh();
     } else {

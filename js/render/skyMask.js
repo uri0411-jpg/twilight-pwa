@@ -166,3 +166,11 @@ export function drawSkyMask(ctx, w, h) {
 export function getSkyMaskSync() {
   return _maskCanvas;
 }
+
+/**
+ * Returns the original photo dimensions of the mask source image.
+ * Used by skyWorker.js to replicate background-size: cover geometry.
+ */
+export function getSkyMaskDimensions() {
+  return { photoW: _photoW, photoH: _photoH };
+}

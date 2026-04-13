@@ -225,7 +225,7 @@ export async function fetchWeek(lat, lon, force = false) {
 export async function fetchAirQuality(lat, lon, force = false) {
   const zone = getZoneForCoord(lat, lon);
   const key  = `airq_zone_${zone.zoneId}`;
-  const ttl  = getWeatherTTL();
+  const ttl  = CACHE_TTL.airq; // 120min — was incorrectly using getWeatherTTL() (180min)
 
   if (force) {
     return fetchWithDedup(key, async () => {

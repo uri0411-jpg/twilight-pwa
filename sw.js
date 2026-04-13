@@ -45,6 +45,7 @@ const STATIC_ASSETS = [
   './js/install-prompt.js',
   './js/notifications.js',
   './js/zones.js',
+  './js/store.js',
   './js/locationSearch.js',
   // Pulse 1-4 additions
   './js/debugPanel.js',
@@ -62,6 +63,7 @@ const STATIC_ASSETS = [
   './js/render/sunDisk.js',
   './js/render/crepuscularRays.js',
   './js/render/nightSky.js',
+  './js/workers/skyWorker.js',
   './js/data/environment.js',
   './js/data/ozone_climatology.js',
   './learning-seed.json',
@@ -135,6 +137,17 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  // Weather / AQ APIs → SWR (stale-while-revalidate) with URL normalization
+  // Serves cached data instantly + revalidates in background when stale.
+  const isWeatherApi = url.hostname.includes('api.open-meteo.com') ||
+                       url.hostname.includes('air-quality-api.open-meteo.com');
+  const isDevWeatherProxy = url.hostname === 'localhost' &&
+    (url.pathname.startsWith('/proxy/weather') || url.pathname.startsWith('/proxy/airq'));
+  if (isWeatherApi || isDevWeatherProxy) {
+    event.respondWith(swrApi(request, event));
+    return;
+  }
+
   const isAPI = API_PATTERNS.some(p => url.hostname.includes(p) || url.href.includes(p));
   // Dev proxy: same-origin /proxy/* paths forward to real APIs via server.js.
   // Treat them identically to direct API calls (networkFirst + JSON offline fallback).
@@ -161,6 +174,72 @@ self.addEventListener('fetch', event => {
 
   event.respondWith(cacheFirst(request));
 });
+
+// ─── WEATHER API SWR ──────────────────
+// Stale-while-revalidate for Open-Meteo weather/AQ endpoints.
+// Normalises URLs so nearby coordinates share a single cache entry.
+// SW-level TTL (6h) is intentionally longer than app-level TTL (2-3h)
+// because the SW is the last-resort offline fallback.
+
+function normalizeApiUrl(rawUrl) {
+  const u = new URL(rawUrl);
+  if (u.hostname.includes('open-meteo') || u.hostname === 'localhost') {
+    const lat = u.searchParams.get('latitude');
+    const lon = u.searchParams.get('longitude');
+    if (lat) u.searchParams.set('latitude', Number(lat).toFixed(3));
+    if (lon) u.searchParams.set('longitude', Number(lon).toFixed(3));
+    u.searchParams.delete('current_weather');
+    u.searchParams.sort(); // canonical order for cache key stability
+  }
+  return u.toString();
+}
+
+async function swrApi(request, event) {
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
+  const cache = await caches.open(CACHE_NAME);
+  const normalizedUrl = normalizeApiUrl(request.url);
+  const cacheKey = new Request(normalizedUrl);
+  const cached = await cache.match(cacheKey);
+
+  if (cached) {
+    const cachedAt = cached.headers.get('X-TWL-Cached-At');
+    const age = cachedAt ? (Date.now() - Number(cachedAt)) : Infinity;
+
+    if (age > SIX_HOURS) {
+      // Stale → serve immediately, revalidate in background
+      event.waitUntil(fetchAndCacheApi(request, cacheKey, cache));
+    }
+    return cached;
+  }
+
+  // No cache → must fetch (throws if offline → JSON error below)
+  try {
+    return await fetchAndCacheApi(request, cacheKey, cache);
+  } catch {
+    return new Response(JSON.stringify({ error: 'offline' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function fetchAndCacheApi(request, cacheKey, cache) {
+  const response = await fetch(request, {
+    cache: 'no-store',
+    headers: { 'cache-control': 'no-cache' }
+  });
+  if (response && response.ok) {
+    const headers = new Headers(response.headers);
+    headers.set('X-TWL-Cached-At', String(Date.now()));
+    const tagged = new Response(await response.clone().blob(), {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+    cache.put(cacheKey, tagged).catch(() => {}); // non-blocking
+  }
+  return response;
+}
 
 async function cacheFirst(request) {
   const cached = await caches.match(request, { ignoreSearch: true });

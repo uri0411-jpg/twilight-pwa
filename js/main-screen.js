@@ -17,8 +17,17 @@ import { renderSunDisk, removeSunDisk } from './render/sunDisk.js';
 import { renderCrepuscularRays, removeCrepuscularRays } from './render/crepuscularRays.js';
 import { renderSkyCanvas, removeSkyCanvas } from './render/skyCanvas.js';
 import { renderNightSky, removeNightSky } from './render/nightSky.js';
-import { loadSkyMask } from './render/skyMask.js';
+import { loadSkyMask, getSkyMaskSync, getSkyMaskDimensions } from './render/skyMask.js';
 import { initLocationSearch } from './locationSearch.js';
+import { getState, isStale } from './store.js';
+
+// ─────────────────────────────────────────
+//  Module-level sky mask preload — starts loading as soon as this
+//  module is imported, well before initMainScreen is called.
+//  The mask is derived from background.jpg (a static asset precached
+//  by the SW) so this resolves from cache on repeat visits.
+// ─────────────────────────────────────────
+const _maskReady = loadSkyMask().catch(() => null);
 
 // ─────────────────────────────────────────
 //  Background decode gate — ensures background.jpg is decoded in GPU
@@ -40,9 +49,6 @@ function ensureBackgroundReady() {
   return _bgReady;
 }
 
-let _weekData = [];
-let _city = '';
-let _loc   = null;
 let _locationSearchCleanup = null;
 
 // ─────────────────────────────────────────
@@ -203,7 +209,7 @@ function getNightFactor(elevDeg) {
   return Math.max(0, Math.min(1, (-elevDeg - 6) / 20));
 }
 
-function startLiveGradient(today, loc) {
+function startLiveGradient(today, loc, locGen) {
   const displayScore = _spotAvgScores?.[0] ?? today.score;
   _screenOpenTime = Date.now();
 
@@ -211,7 +217,45 @@ function startLiveGradient(today, loc) {
   let _prevScoreTier = displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low';
   let isReady = false;
 
+  // ── Sky Worker setup (off-thread gradient rendering) ──
+  const canOffscreen = typeof OffscreenCanvas !== 'undefined';
+  let skyW = null;
+
+  if (canOffscreen) {
+    try {
+      skyW = new Worker('./js/workers/skyWorker.js', { type: 'module' });
+      // Transfer mask bitmap when ready
+      const maskCanvas = getSkyMaskSync();
+      if (maskCanvas) {
+        const { photoW, photoH } = getSkyMaskDimensions();
+        createImageBitmap(maskCanvas).then(bitmap => {
+          skyW.postMessage({ type: 'init-mask', mask: bitmap, photoW, photoH }, [bitmap]);
+        }).catch(() => { skyW = null; }); // fallback if bitmap creation fails
+      }
+      skyW.onmessage = ({ data: msg }) => {
+        if (msg.type === 'frame') {
+          const skyLayers = document.getElementById('sky-layers');
+          const canvas = skyLayers?.querySelector('#sky-canvas');
+          if (canvas) {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(msg.bitmap, 0, 0, canvas.width, canvas.height);
+          }
+          msg.bitmap.close();
+        }
+      };
+      skyW.onerror = () => { skyW = null; }; // fallback on any worker error
+    } catch {
+      skyW = null; // Worker creation failed — fallback to inline rendering
+    }
+  }
+
   function update() {
+    // ── Location/state gate ──────────────────────────────────────────────────
+    const state = getState();
+    if (!state.locationResolved || !state.loc) return;
+    if (locGen !== undefined && isStale(locGen)) return; // location changed → loop dead
+
     // ── State computation (pure, no try-catch) ─────────────────────────────
     let liveSkyColors  = today.skyColors ?? null;
     let liveElevDeg    = today._solarElevation ?? 0;
@@ -341,15 +385,33 @@ function startLiveGradient(today, loc) {
     const skyLayers = document.getElementById('sky-layers');
     if (skyLayers) {
       try {
-        renderSkyCanvas(
-          skyLayers,
-          liveElevDeg * (Math.PI / 180),
-          today.turbidity  ?? 0.3,
-          today.angstromExp ?? 0,
-          today.goldenWindow?.beltOfVenus || 0,
-          cloudFractionsFor(today),
-          today.mieGrowthFactor ?? 1,
-        );
+        const sunAngle_rad = liveElevDeg * (Math.PI / 180);
+        if (skyW) {
+          // Off-thread: send params to worker (delta-gated inside worker)
+          const w = skyLayers.offsetWidth || window.innerWidth;
+          const h = skyLayers.offsetHeight || window.innerHeight;
+          skyW.postMessage({
+            type: 'render',
+            sunAngle_rad,
+            turbidity:    today.turbidity ?? 0.3,
+            angstromExp:  today.angstromExp ?? 0,
+            beltOfVenus:  today.goldenWindow?.beltOfVenus || 0,
+            clouds:       cloudFractionsFor(today),
+            mieGrowth:    today.mieGrowthFactor ?? 1,
+            w, h,
+          });
+        } else {
+          // Fallback: inline rendering (Safari, worker creation failure)
+          renderSkyCanvas(
+            skyLayers,
+            sunAngle_rad,
+            today.turbidity  ?? 0.3,
+            today.angstromExp ?? 0,
+            today.goldenWindow?.beltOfVenus || 0,
+            cloudFractionsFor(today),
+            today.mieGrowthFactor ?? 1,
+          );
+        }
       } catch (e) {
         console.warn('[render] skyCanvas:', e.message);
         if (window.__twl_debug) window.__twl_debug.renderFails++;
@@ -398,6 +460,7 @@ function startLiveGradient(today, loc) {
   const id = setInterval(update, 30_000);
   return () => {
     clearInterval(id);
+    if (skyW) { skyW.terminate(); skyW = null; }
     const skyLayers = document.getElementById('sky-layers');
     removeSkyCanvas(skyLayers);
     removeSunDisk(skyLayers);
@@ -443,21 +506,22 @@ function computeDaySkyColors(day) {
  * using the latest live skyColors. Call after rendering a new screen.
  */
 export function repaintScoreColors() {
-  const skyColors = _weekData?.[0]?.skyColors;
+  const skyColors = getState().weekData?.[0]?.skyColors;
   if (!skyColors?.horizon) return;
-  const mainScore = _spotAvgScores?.[0] ?? _weekData?.[0]?.score ?? 5;
+  const mainScore = _spotAvgScores?.[0] ?? getState().weekData?.[0]?.score ?? 5;
   _updateLiveScoreColors(skyColors, mainScore);
 }
 
 export async function initMainScreen(loc, city, weekData, spotAvgScores = null) {
+  if (!getState().locationResolved) {
+    console.warn('[main] initMainScreen called before locationResolved — aborting');
+    return;
+  }
   if (!weekData?.length || !weekData[0]) {
     console.error('[main] initMainScreen called with empty weekData — aborting render');
     return;
   }
 
-  _weekData = weekData;
-  _city     = city;
-  _loc      = loc;
   _spotAvgScores = spotAvgScores;
 
   // Render layer: compute sky colours for every day in the week.
@@ -486,26 +550,24 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
   attachMainEvents();
   startCountdown(weekData[0]);
 
-  // ── GRADED RENDER BARRIER ──
-  // Wait for background.jpg decode + sky mask computation before starting
-  // the live gradient. Soft timeout (300ms) prevents blocking on slow networks;
-  // First Frame Freeze in skyCanvas.js acts as safety net if timeout fires early.
-  const bgPromise   = ensureBackgroundReady();
-  const maskPromise = loadSkyMask().catch(e => {
-    console.warn('[main] sky mask load failed:', e?.message);
-    if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.renderFails++;
-    return null;
-  });
-
-  await Promise.race([
-    Promise.all([bgPromise, maskPromise]),
-    new Promise(resolve => setTimeout(resolve, 300)),
+  // ── DETERMINISTIC RENDER BARRIER ──
+  // Wait for background.jpg decode + sky mask (preloaded at module level)
+  // before starting the live gradient. No timing-based race — both must resolve.
+  // Sky mask is preloaded at module import time → resolves from cache instantly.
+  await Promise.all([
+    ensureBackgroundReady(),
+    _maskReady,
   ]);
+
+  // Render cancellation: if location changed while we awaited, abort.
+  const locGen = getState().locGen;
+  if (isStale(locGen)) return;
 
   const today = weekData[0];
   if (today) {
     // Pulse 3: dynamic background gradient — live update every 30 s
-    _stopLiveGradient = startLiveGradient(today, loc);
+    // Pass locGen so the render loop can self-cancel on location change.
+    _stopLiveGradient = startLiveGradient(today, loc, locGen);
 
     // Pulse 1: debug panel — long-press on title to reveal
     initDebugPanel('.home-title', today, loc);
@@ -545,7 +607,6 @@ export async function initMainScreen(loc, city, weekData, spotAvgScores = null) 
  * Refresh main screen with new data
  */
 export function refreshMain(weekData) {
-  _weekData = weekData;
   const el = document.getElementById('week-bars');
   if (el) el.innerHTML = renderWeekBars(weekData);
   const scrollEl = document.getElementById('daily-scroll');
@@ -564,7 +625,6 @@ export function refreshMainScores(weekData, spotAvgScores = null) {
   // Guard: if the main screen hasn't been built yet, fall through silently.
   if (!document.querySelector('.score-gauge-wrap')) return;
 
-  _weekData      = weekData;
   _spotAvgScores = spotAvgScores;
 
   // Recompute physics sky colours for every day (same as initMainScreen does)
@@ -603,7 +663,7 @@ export function refreshMainScores(weekData, spotAvgScores = null) {
 
   // 4. Restart live gradient so it picks up the new sky colours
   if (_stopLiveGradient) { _stopLiveGradient(); _stopLiveGradient = null; }
-  _stopLiveGradient = startLiveGradient(today, _loc);
+  _stopLiveGradient = startLiveGradient(today, getState().loc, getState().locGen);
 
   // 5. Propagate sky colours to all score badges, strips, etc.
   repaintScoreColors();
@@ -1447,7 +1507,7 @@ function attachMainEvents() {
   const { signal } = _mainEventsAC;
   // ─── Quick-alert FAB — thumb-zone shortcut for 30-min pre-sunset alert ───
   const fab     = document.getElementById('quick-alert-fab');
-  const today   = _weekData[0];
+  const today   = getState().weekData?.[0];
   if (fab && today) {
     const minScore = (() => {
       try { return JSON.parse(localStorage.getItem('twl_settings') || '{}').minScore ?? 6; }
@@ -1562,7 +1622,7 @@ function attachMainEvents() {
         return;
       }
       // Find the event time from weekData
-      const dayData = _weekData.find(d => d.date === date);
+      const dayData = getState().weekData?.find(d => d.date === date);
       if (!dayData) return;
       const timeStr = evt === 'sunrise' ? dayData.sunrise : dayData.sunset;
       const [h, m] = timeStr.split(':').map(Number);
@@ -1586,7 +1646,8 @@ function attachMainEvents() {
 function _refreshBellState(date) {
   const alerts = getSavedAlerts();
   // Per-day bells
-  _weekData.forEach((d, i) => {
+  const wd = getState().weekData || [];
+  wd.forEach((d, i) => {
     if (d.date !== date) return;
     const bell = document.getElementById(`day-bell-btn-${i}`);
     if (!bell) return;
@@ -1594,7 +1655,7 @@ function _refreshBellState(date) {
     bell.classList.toggle('bell-btn--active', hasAny);
   });
   // Main bell (today)
-  if (_weekData[0]?.date === date) {
+  if (wd[0]?.date === date) {
     const mainBell = document.getElementById('main-bell-btn');
     const hasAny = Object.keys(alerts).some(k => k.startsWith(date + '-'));
     mainBell?.classList.toggle('bell-btn--active', hasAny);
@@ -1644,7 +1705,7 @@ window.toggleDaily = function(i) {
 //  Share a daily forecast (#17)
 // ─────────────────────────────────────────
 window._shareDay = function(i) {
-  const d = _weekData[i];
+  const d = getState().weekData?.[i];
   if (!d) return;
   const text = `${d.day} ${d.shortDate}: ${d.score}/10 — ${d.scoreLabel}\n` +
                `שקיעה: ${d.sunset}  |  ${d.cond}  |  עננות: ${d.cloud}`;
@@ -1683,7 +1744,8 @@ window._compareDay = function(i) {
 };
 
 function _showCompareOverlay(iA, iB) {
-  const a = _weekData[iA], b = _weekData[iB];
+  const wd = getState().weekData || [];
+  const a = wd[iA], b = wd[iB];
   if (!a || !b) return;
 
   const col = (d) => `
