@@ -589,10 +589,11 @@ async function handleSetLocation(e) {
     const pinKey = `${_SCORE_PIN_KEY}_z_${pinZone.zoneId}`;
     localStorage.removeItem(pinKey);
 
-    // Start all fetches concurrently
-    const weatherPromise = fetchWeekFast(lat, lon, true);
-    const aqPromise      = fetchAirQuality(lat, lon, true).catch(() => null);
-    const westPromise    = fetchWesternHorizon(lat, lon, true).catch(() => null);
+    // Zone-aware SWR: serve from cache if zone already has fresh data (0 API calls).
+    // force=true is reserved for handleRefresh (manual pull-to-refresh).
+    const weatherPromise = fetchWeekFast(lat, lon);
+    const aqPromise      = fetchAirQuality(lat, lon).catch(() => null);
+    const westPromise    = fetchWesternHorizon(lat, lon).catch(() => null);
 
     // Render as soon as primary weather arrives
     const weather = await weatherPromise;
@@ -616,8 +617,9 @@ async function handleSetLocation(e) {
       refreshMainScores(_weekData, calcNearbyAvgScore(null, _weekData));
     }
 
-    // Background ensemble refinement (location change → always a fresh fetch)
-    fetchWeekEnsemble(lat, lon, weather, true).then(refined => {
+    // Background ensemble refinement — only if weather was actually fetched (not from cache)
+    const wasFresh = !weather._isStale && weather._modelCount === 1;
+    wasFresh && fetchWeekEnsemble(lat, lon, weather, true).then(refined => {
       if (!refined || isStale(gen)) return;
       _weekData = _applyScoreEMA(
         calcWeekData(refined, airQ, lat, lon, westData),

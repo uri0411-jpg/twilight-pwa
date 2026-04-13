@@ -170,10 +170,7 @@ export function detectClimateProfile(lat) {
  * Returns TTL in minutes.
  */
 export function getWeatherTTL() {
-  const hour = new Date().getHours();
-  if (hour >= 5 && hour <= 9)   return 120;  // sunrise instability
-  if (hour >= 15 && hour <= 20) return 120;  // sunset window — most critical
-  return 240; // stable periods (midday, night)
+  return 180; // 3 hours — zone-level cache shared across location searches
 }
 
 export const ELEV_BONUS_THRESHOLD = 400;

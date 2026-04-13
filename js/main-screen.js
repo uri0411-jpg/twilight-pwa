@@ -1063,7 +1063,9 @@ function buildMainHTML(loc, city, weekData) {
       <div id="city-display" style="display:flex;align-items:center;gap:6px;cursor:pointer" title="לחץ לשינוי מיקום">
         <svg width="12" height="12" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
         <span style="font-size:13px;color:var(--cream-faint);font-weight:600">${city}</span>
-        <svg width="10" height="10" fill="none" stroke="var(--cream-faint)" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
+      <div class="icon-btn" id="search-btn" title="חפש מיקום">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:var(--cream-faint)"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </div>
     </div>
 
@@ -1504,11 +1506,15 @@ function attachMainEvents() {
       }
     });
 
-    cityDisplay.addEventListener('click', () => {
+    const openSearch = () => {
       searchBar.classList.add('open');
       cityDisplay.style.visibility = 'hidden';
       searchBar.querySelector('.loc-search-input')?.focus();
-    });
+    };
+    cityDisplay.addEventListener('click', openSearch);
+
+    const searchBtn = document.getElementById('search-btn');
+    searchBtn?.addEventListener('click', openSearch);
   }
 
   // ─── Score gauge tap → Tier-2 explainer tray ───
