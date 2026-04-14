@@ -1316,81 +1316,86 @@ body.has-install-banner .screen { padding-top: 56px; }
   border-radius: var(--twl-radius-bar);
   position: relative;
 }
-/* ── Score fill — meniscus + tinted body + inner/outer glow ── */
+/* ── Sky-window fill — physics-driven 7-stop sunset gradient (set inline) ── */
 .week-bar-fill {
   position: absolute;
   bottom: 0; left: 0; right: 0;
-  min-height: 15%;
-  background:
-    /* Meniscus — bright rim at fill top, fades over 8% */
-    linear-gradient(to bottom, rgba(255,255,255,0.20), transparent 8%),
-    /* Score-tinted body — stronger at top, fades to near-transparent */
-    linear-gradient(to bottom,
-      rgba(var(--score-color-rgb, 255, 100, 0), 0.32) 0%,
-      rgba(var(--score-color-rgb, 255, 100, 0), 0.14) 50%,
-      rgba(var(--score-color-rgb, 255, 100, 0), 0.03) 100%);
+  min-height: 28%;
+  /* background-image injected inline from scoreToSkyBg().gradient */
+  background-color: rgba(12, 6, 2, 0.35);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.28),                      /* inner top highlight */
-    0 0 28px rgba(var(--score-color-rgb, 255, 100, 0), 0.28),  /* outer glow halo */
-    0 4px 16px rgba(0,0,0,0.18);                               /* lift shadow */
+    inset 0 0 0 1px rgba(255, 235, 195, 0.08),                /* subtle inner rim */
+    0 0 22px rgba(var(--score-color-rgb, 255, 100, 0), 0.30), /* outer halo (live-tinted) */
+    0 6px 18px rgba(0, 0, 0, 0.30);                            /* lift shadow */
   border-radius: 0 0 var(--twl-radius-bar) var(--twl-radius-bar);
-  transition: height var(--twl-motion-duration-slow) var(--twl-motion-ease-out);
-  overflow: visible;
+  transition: height var(--twl-motion-duration-slow) var(--twl-motion-ease-out),
+              background-image 0.6s linear;
+  overflow: hidden;
 }
-/* Hard highlight — 2px bright edge, blur 1px — "wet / glassy" feel */
+/* Ember top line — 2.5px hot stripe with warm glow, live-tinted */
 .week-bar-fill::before {
   content: '';
   position: absolute;
-  top: 0; left: 10%; right: 10%;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.82);
-  filter: blur(1px);
-  opacity: 0.65;
-  border-radius: 2px;
-  z-index: 2;
+  top: 0; left: 0; right: 0;
+  height: 2.5px;
+  background: linear-gradient(to right,
+    transparent 0%,
+    rgba(255, 245, 215, 0.35) 6%,
+    rgba(255, 235, 180, 0.95) 22%,
+    rgba(255, 230, 170, 1.0) 50%,
+    rgba(255, 235, 180, 0.95) 78%,
+    rgba(255, 245, 215, 0.35) 94%,
+    transparent 100%);
+  box-shadow:
+    0 0 6px rgba(var(--score-color-rgb, 255, 180, 80), 0.85),
+    0 0 14px rgba(var(--score-color-rgb, 255, 180, 80), 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.12);
+  z-index: 3;
   pointer-events: none;
 }
-/* Glow-cap — radial halo floating just above the fill's top edge.
-   Extends outside the fill (overflow:visible on fill, no clip on track) */
+/* Cloud banding — soft horizontal ripples for atmospheric texture */
 .week-bar-fill::after {
   content: '';
   position: absolute;
-  top: -8px; left: 0; right: 0;
-  height: 16px;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at center,
-    rgba(var(--score-color-rgb, 255, 100, 0), 0.80),
-    transparent 72%);
-  filter: blur(3px);
-  z-index: 1;
+  inset: 0;
+  background: repeating-linear-gradient(to bottom,
+    transparent 0px,
+    transparent 9px,
+    rgba(255, 240, 210, 0.035) 9px,
+    rgba(255, 240, 210, 0.035) 12px);
+  mix-blend-mode: screen;
+  opacity: 0.7;
+  z-index: 2;
   pointer-events: none;
 }
 /* Watercolor bloom — disabled */
 .week-bar-wc { display: none; }
-/* Ember pulse — high-score bars pulse the hard highlight */
+/* Ember pulse — high-score bars pulse the ember top stripe */
 .week-bar-fill[data-shimmer]::before {
   animation: ember-pulse 3s ease-in-out infinite;
 }
 @keyframes ember-pulse {
-  0%, 100% { opacity: 0.65; }
-  50%       { opacity: 0.28; filter: blur(2px); }
+  0%, 100% { filter: brightness(1);    }
+  50%       { filter: brightness(1.35); }
 }
-/* Score number — light weight, tnum, tight tracking — "luxury watch face" */
+/* Score number — cream-peach, lower third — "ember overlay on sunset" */
 .week-bar-score {
   position: absolute;
-  top: 50%; left: 0; right: 0;
-  transform: translateY(-50%);
+  top: auto;
+  bottom: 22%;
+  left: 0; right: 0;
+  transform: none;
   text-align: center;
   font-size: var(--twl-font-size-lg);
-  font-weight: var(--twl-font-weight-hero);
-  letter-spacing: var(--twl-letter-spacing-tight);
+  font-weight: 300;
+  letter-spacing: -0.02em;
   font-feature-settings: "tnum";
   line-height: 1;
-  color: var(--twl-dynamic-text-glow);
+  color: rgba(255, 235, 205, 0.96);
   text-shadow:
-    0 0 8px rgba(0, 0, 0, 0.85),
-    0 0 16px rgba(0, 0, 0, 0.45),
-    0 1px 2px rgba(0, 0, 0, 0.95);
+    0 0 10px rgba(20, 8, 0, 0.85),
+    0 1px 3px rgba(0, 0, 0, 0.95),
+    0 0 22px rgba(var(--score-color-rgb, 255, 180, 80), 0.28);
   z-index: 5;
   pointer-events: none;
 }

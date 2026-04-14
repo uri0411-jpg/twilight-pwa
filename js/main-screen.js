@@ -146,14 +146,16 @@ function _updateLiveScoreColors(skyColors, mainScore) {
     if (!isNaN(s)) el.style.color = scoreToBarStyle(s, skyColors).scoreColor;
   }
 
-  // 3. Week bar fills — update score color on live sky tick
+  // 3. Week bar fills — update score color + sky gradient on live sky tick
   for (const el of document.querySelectorAll('.week-bar-fill')) {
     const scoreEl = el.querySelector('.week-bar-score');
     const s = scoreEl ? parseFloat(scoreEl.dataset.score ?? scoreEl.textContent) : NaN;
     if (!isNaN(s)) {
       const barStyle = scoreToBarStyle(s, skyColors);
+      const skyBg    = scoreToSkyBg(s, skyColors);
       const track = el.closest('.week-bar-track');
       if (track) track.style.setProperty('--score-color-rgb', barStyle.scoreColorRgb);
+      el.style.backgroundImage = skyBg.gradient;
     }
   }
 
@@ -664,7 +666,7 @@ export function refreshMainScores(weekData, spotAvgScores = null) {
     const svgEl = gaugeWrap.querySelector('svg');
     if (svgEl) {
       const tmp = document.createElement('div');
-      tmp.innerHTML = buildGaugeArc(displayScore, displayColor, 130);
+      tmp.innerHTML = buildGaugeArc(displayScore, displayColor, 130, scoreToSkyBg(displayScore, today.skyColors));
       svgEl.replaceWith(tmp.firstElementChild);
       // Kick the arc animation (same two-rAF trick as initMainScreen)
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1168,7 +1170,7 @@ function buildMainHTML(loc, city, weekData) {
       <div class="score-top">
         <!-- Gauge arc (replaces plain number) -->
         <div class="score-gauge-wrap" role="status" aria-live="off" aria-label="ציון שקיעה: ${displayScore.toFixed(1)} מתוך 10" data-score-tier="${displayScore >= 7 ? 'high' : displayScore >= 4 ? 'mid' : 'low'}">
-          ${buildGaugeArc(displayScore, displayColor, 130)}
+          ${buildGaugeArc(displayScore, displayColor, 130, scoreToSkyBg(displayScore, today.skyColors))}
           <div class="score-desc">${displayLabel}</div>
           ${today.palette?.styleHe ? `<div class="palette-badge">✦ ${today.palette.styleHe}</div>` : ''}
           <!-- Trend arrow -->
@@ -1270,13 +1272,14 @@ function renderWeekBars(weekData) {
     }
     const ds = (_spotAvgScores != null && _spotAvgScores[i] != null) ? _spotAvgScores[i] : d.score;
     const barStyle   = scoreToBarStyle(ds, d.skyColors);
-    const heightCalc = `calc(max(15%, (${ds.toFixed(2)} / 10) * 100%))`;
+    const skyBg      = scoreToSkyBg(ds, d.skyColors);
+    const heightCalc = `calc(max(28%, (${ds.toFixed(2)} / 10) * 100%))`;
 
     return `
     <div class="week-bar-item" onclick="toggleDaily(${i})">
       <div class="week-bar-track" style="--score-color-rgb:${barStyle.scoreColorRgb}">
         <div class="week-bar-fill" data-score="${ds.toFixed(1)}" ${ds >= 7 ? 'data-shimmer' : ''}
-             style="height:${heightCalc}">
+             style="height:${heightCalc};background-image:${skyBg.gradient}">
           <span class="week-bar-score" data-score="${ds.toFixed(1)}">${ds.toFixed(1)}</span>
         </div>
       </div>

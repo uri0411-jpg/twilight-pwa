@@ -148,6 +148,9 @@ export function scoreToSkyBg(score, skyColors) {
 
   return {
     gradient: `linear-gradient(180deg,${c(wet)} 0%,${c(r1)} 10%,${c(r2)} 28%,${hex} 50%,${c(r4)} 68%,${c(r5)} 85%,${c(settled)} 100%)`,
+    // Discrete stops + offsets for SVG gradient consumers (gauge vessel)
+    stops:   [c(wet), c(r1), c(r2), hex, c(r4), c(r5), c(settled)],
+    offsets: [0, 10, 28, 50, 68, 85, 100],
     glassGradient: `rgba(${loaded.r},${loaded.g},${loaded.b},0.20)`,
     glow: `${hex}88`,
     strip: hex,
@@ -604,7 +607,7 @@ export function getSolarDeclination(date) {
 // ─────────────────────────────────────────
 //  SVG gauge arc for score (half-circle)
 // ─────────────────────────────────────────
-export function buildGaugeArc(score, color, size = 120) {
+export function buildGaugeArc(score, color, size = 120, skyBg = null) {
   const cx = size / 2;
   const cy = size / 2 + 4;
   const r  = size / 2 - 10;
@@ -629,14 +632,25 @@ export function buildGaugeArc(score, color, size = 120) {
     : `M ${cx} ${cy} Z`; // invisible point for pct≈0
 
   const arcTarget = `${filled} ${gap}`;
+
+  // Sky vessel gradient — physics-driven 7-stop sunset (matches week bars)
+  // Falls back gracefully to dark amber tint if no skyBg supplied.
+  const skyStops  = skyBg?.stops   || ['#3a1a08', '#5a280a', '#7a3210', '#a04612', '#7a3210', '#4a200a', '#1a0a04'];
+  const skyOffsets = skyBg?.offsets || [0, 10, 28, 50, 68, 85, 100];
+  const skyGradStops = skyStops.map((hex, i) => `<stop offset="${skyOffsets[i]}%" stop-color="${hex}"/>`).join('');
+
   return `
     <svg width="${size}" height="${size / 2 + 18}" viewBox="0 0 ${size} ${size / 2 + 18}" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <!-- Fill gradient: bright near arc (top) → dim at baseline (bottom) -->
+        <!-- Sky vessel gradient: physics-derived 7-stop sunset -->
+        <linearGradient id="gauge-sky" x1="${cx}" y1="${cy - r}" x2="${cx}" y2="${cy}" gradientUnits="userSpaceOnUse">
+          ${skyGradStops}
+        </linearGradient>
+        <!-- Sector tint: live score-color overlay on top of the sky for the scored portion -->
         <linearGradient id="gauge-fill-grad" x1="${cx}" y1="${cy - r}" x2="${cx}" y2="${cy}" gradientUnits="userSpaceOnUse">
-          <stop class="gauge-grad-stop" offset="0%"   stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.28"/>
-          <stop class="gauge-grad-stop" offset="55%"  stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.10"/>
-          <stop class="gauge-grad-stop" offset="100%" stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.02"/>
+          <stop class="gauge-grad-stop" offset="0%"   stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.22"/>
+          <stop class="gauge-grad-stop" offset="55%"  stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.08"/>
+          <stop class="gauge-grad-stop" offset="100%" stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.0"/>
         </linearGradient>
         <!-- Glint: animated sweep gradient (moves left→right via SMIL) -->
         <linearGradient id="gauge-sweep" gradientUnits="userSpaceOnUse" x1="-70" y1="0" x2="-10" y2="0">
@@ -647,14 +661,21 @@ export function buildGaugeArc(score, color, size = 120) {
           <animate attributeName="x1" values="-70; 200" dur="6s" repeatCount="indefinite" calcMode="linear"/>
           <animate attributeName="x2" values="-10; 260" dur="6s" repeatCount="indefinite" calcMode="linear"/>
         </linearGradient>
+        <!-- Subtle horizontal cloud banding inside the vessel -->
+        <pattern id="gauge-cloud-bands" x="0" y="0" width="${size}" height="12" patternUnits="userSpaceOnUse">
+          <rect x="0" y="9" width="${size}" height="3" fill="rgba(255,240,210,0.04)"/>
+        </pattern>
       </defs>
-      <!-- D-shape vessel background -->
+      <!-- D-shape vessel: filled with physics sky gradient (the "window into sunset") -->
       <path d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy} L ${startX} ${cy} Z"
-            fill="rgba(10,5,2,0.45)" />
+            fill="url(#gauge-sky)" />
+      <!-- Cloud banding overlay -->
+      <path d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy} L ${startX} ${cy} Z"
+            fill="url(#gauge-cloud-bands)" style="mix-blend-mode:screen" />
       <!-- Track border (outer arc, 1px) -->
       <path d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy}"
             stroke="rgba(245,224,190,0.07)" stroke-width="1" fill="none" />
-      <!-- Sector fill with gradient (bright at arc boundary, fades to baseline) -->
+      <!-- Sector tint: live score-color glow on the scored portion -->
       <path class="gauge-sector-fill" d="${sectorD}" fill="url(#gauge-fill-grad)" />
       <!-- Glint: sector path filled with animated sweep gradient -->
       <path class="gauge-glint-path" d="${sectorD}"
@@ -678,10 +699,15 @@ export function buildGaugeArc(score, color, size = 120) {
             stroke-dasharray="0 ${totalArc}"
             data-arc-target="${arcTarget}"
             style="filter:drop-shadow(0 0 5px ${color}88) drop-shadow(0 0 14px ${color}44) drop-shadow(0 0 28px ${color}22);transition:stroke-dasharray 1.1s var(--twl-motion-ease-out)" />
-      <!-- Score number — hero weight, tnum, tight tracking ("luxury watch face") -->
+      <!-- Ember highlight: hot cream-white stripe layered on the rim arc (matches week-bar ember line) -->
+      <path class="gauge-ember-highlight" d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy}"
+            stroke="rgba(255, 240, 200, 0.85)" stroke-width="1.4" fill="none"
+            stroke-linecap="round" pointer-events="none"
+            style="filter:drop-shadow(0 0 3px rgba(255,235,190,0.9)) drop-shadow(0 0 10px ${color}77)" />
+      <!-- Score number — cream-peach, hero weight (matches week-bar score color) -->
       <text class="gauge-score-text" x="${cx}" y="${cy - 12}" text-anchor="middle"
-            fill="${color}"
-            style="font-family:var(--font-title);font-size:36px;font-weight:300;letter-spacing:-0.04em;font-feature-settings:'tnum';filter:drop-shadow(0 0 8px ${color}77) drop-shadow(0 2px 5px rgba(0,0,0,0.85))">
+            fill="rgba(255,235,205,0.96)"
+            style="font-family:var(--font-title);font-size:36px;font-weight:300;letter-spacing:-0.04em;font-feature-settings:'tnum';filter:drop-shadow(0 0 8px ${color}66) drop-shadow(0 0 18px rgba(${cr},${cg},${cb},0.35)) drop-shadow(0 2px 5px rgba(0,0,0,0.85))">
         ${displayScore}
       </text>
       <text x="${cx}" y="${cy - 1}" text-anchor="middle"
