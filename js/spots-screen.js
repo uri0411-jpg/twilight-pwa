@@ -591,7 +591,7 @@ async function initMap() {
   const lat = _loc?.lat || 32.0853, lon = _loc?.lon || 34.7818;
   _map = new maplibregl.Map({
     container: 'spots-map',
-    style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
     center: [lon, lat],
     zoom: 11,
     attributionControl: true

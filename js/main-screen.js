@@ -1214,29 +1214,6 @@ function buildMainHTML(loc, city, weekData) {
         <span>${recommendation}</span>
       </div>
 
-      <!-- Bottom stats grid — 2×2 premium tiles -->
-      <div class="score-stats-row">
-        <div class="stat-tile" style="--fill-pct:${today._cloudRaw}%;animation-delay:0ms" ${today._cloudRaw >= 20 && today._cloudRaw <= 40 ? 'data-optimal="true"' : today._cloudRaw > 70 ? 'data-bad="true"' : ''}>
-          <svg class="stat-tile-icon" width="22" height="22" fill="none" stroke="var(--cream-faint)" stroke-width="1.5" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>
-          <span class="stat-tile-value">${today.cloud}</span>
-          <span class="stat-tile-label">עננות</span>
-        </div>
-        <div class="stat-tile" style="--fill-pct:${today._humidityRaw}%;animation-delay:50ms" ${today._humidityRaw >= 40 && today._humidityRaw <= 60 ? 'data-optimal="true"' : today._humidityRaw > 80 ? 'data-bad="true"' : ''}>
-          <svg class="stat-tile-icon" width="22" height="22" fill="none" stroke="var(--cream-faint)" stroke-width="1.5" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 4-7 13-7 13S5 13 5 9a7 7 0 0 1 7-7z"/></svg>
-          <span class="stat-tile-value">${today.humidity}</span>
-          <span class="stat-tile-label">לחות</span>
-        </div>
-        <div class="stat-tile" style="--fill-pct:${Math.min(100, today._windRaw * 2.5)}%;animation-delay:100ms" ${today._windRaw < 10 ? 'data-optimal="true"' : today._windRaw > 30 ? 'data-bad="true"' : ''}>
-          <svg class="stat-tile-icon" width="22" height="22" fill="none" stroke="var(--cream-faint)" stroke-width="1.5" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-          <span class="stat-tile-value">${today.wind}</span>
-          <span class="stat-tile-label">רוח</span>
-        </div>
-        <div class="stat-tile" style="--fill-pct:${Math.min(100, (today._visibilityRaw / 30) * 100)}%;animation-delay:150ms" ${today._visibilityRaw >= 20 ? 'data-optimal="true"' : today._visibilityRaw < 5 ? 'data-bad="true"' : ''}>
-          <svg class="stat-tile-icon" width="22" height="22" fill="none" stroke="var(--cream-faint)" stroke-width="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="12" x2="16" y2="14"/></svg>
-          <span class="stat-tile-value">${today.visibility} ק״מ</span>
-          <span class="stat-tile-label">נראות</span>
-        </div>
-      </div>
     </div>
 
     <!-- 7-day bar chart -->
