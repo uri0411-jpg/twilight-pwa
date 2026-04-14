@@ -665,7 +665,7 @@ export function buildGaugeArc(score, color, size = 120) {
             stroke-linecap="butt"
             stroke-dasharray="0 ${totalArc}"
             data-arc-target="${arcTarget}"
-            style="transition:stroke-dasharray 1.1s cubic-bezier(0.22,1,0.36,1)" />
+            style="transition:stroke-dasharray 1.1s var(--twl-motion-ease-out)" />
       <!-- Baseline ember line (floor of the vessel) -->
       <line class="gauge-baseline"
             x1="${startX}" y1="${cy}" x2="${endX}" y2="${cy}"
@@ -677,7 +677,7 @@ export function buildGaugeArc(score, color, size = 120) {
             stroke-linecap="round"
             stroke-dasharray="0 ${totalArc}"
             data-arc-target="${arcTarget}"
-            style="filter:drop-shadow(0 0 5px ${color}88) drop-shadow(0 0 14px ${color}44) drop-shadow(0 0 28px ${color}22);transition:stroke-dasharray 1.1s cubic-bezier(0.22,1,0.36,1)" />
+            style="filter:drop-shadow(0 0 5px ${color}88) drop-shadow(0 0 14px ${color}44) drop-shadow(0 0 28px ${color}22);transition:stroke-dasharray 1.1s var(--twl-motion-ease-out)" />
       <!-- Score number — hero weight, tnum, tight tracking ("luxury watch face") -->
       <text class="gauge-score-text" x="${cx}" y="${cy - 12}" text-anchor="middle"
             fill="${color}"
