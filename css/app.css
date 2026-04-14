@@ -1360,16 +1360,16 @@ body.has-install-banner .screen { padding-top: 56px; }
   85%  { opacity: 1; }
   100% { background-position: -100% center; opacity: 0; }
 }
-/* Gauge sector glint — diagonal stripe sweeping across scored area */
-.gauge-glint {
-  animation: gaugeGlint 6s ease-in-out infinite;
+/* Gauge glint — CSS controls opacity, SMIL controls position */
+.gauge-glint-path {
+  animation: gaugeGlintFade 6s linear infinite;
   pointer-events: none;
 }
-@keyframes gaugeGlint {
-  0%,  35%  { transform: translateX(-70px) skewX(-15deg); opacity: 0; }
-  42%        { opacity: 1; }
-  58%        { opacity: 1; }
-  65%, 100%  { transform: translateX(200px) skewX(-15deg); opacity: 0; }
+@keyframes gaugeGlintFade {
+  0%, 12%   { opacity: 0; }
+  22%        { opacity: 1; }
+  78%        { opacity: 1; }
+  88%, 100%  { opacity: 0; }
 }
 .week-bar-day { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; color: var(--cream-faint); text-align: center; }
 .week-bar-date { font-size: 9px; letter-spacing: 0.05em; color: rgba(245,230,200,0.3); text-align: center; }

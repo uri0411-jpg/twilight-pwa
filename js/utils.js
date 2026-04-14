@@ -638,17 +638,15 @@ export function buildGaugeArc(score, color, size = 120) {
           <stop class="gauge-grad-stop" offset="55%"  stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.10"/>
           <stop class="gauge-grad-stop" offset="100%" stop-color="rgb(${cr},${cg},${cb})" stop-opacity="0.02"/>
         </linearGradient>
-        <!-- Glint stripe gradient: transparent → white → transparent (horizontal) -->
-        <linearGradient id="gauge-glint-grad" x1="0" x2="1" y1="0" y2="0">
+        <!-- Glint: animated sweep gradient (moves left→right via SMIL) -->
+        <linearGradient id="gauge-sweep" gradientUnits="userSpaceOnUse" x1="-70" y1="0" x2="-10" y2="0">
           <stop offset="0%"   stop-color="white" stop-opacity="0"/>
-          <stop offset="35%"  stop-color="white" stop-opacity="0.08"/>
-          <stop offset="55%"  stop-color="white" stop-opacity="0.12"/>
+          <stop offset="40%"  stop-color="white" stop-opacity="0.15"/>
+          <stop offset="60%"  stop-color="white" stop-opacity="0.22"/>
           <stop offset="100%" stop-color="white" stop-opacity="0"/>
+          <animate attributeName="x1" values="-70; 200" dur="6s" repeatCount="indefinite" calcMode="linear"/>
+          <animate attributeName="x2" values="-10; 260" dur="6s" repeatCount="indefinite" calcMode="linear"/>
         </linearGradient>
-        <!-- Clip to sector shape so glint stays inside scored area -->
-        <clipPath id="gauge-sector-clip">
-          <path d="${sectorD}" />
-        </clipPath>
       </defs>
       <!-- D-shape vessel background -->
       <path d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy} L ${startX} ${cy} Z"
@@ -658,12 +656,9 @@ export function buildGaugeArc(score, color, size = 120) {
             stroke="rgba(245,224,190,0.07)" stroke-width="1" fill="none" />
       <!-- Sector fill with gradient (bright at arc boundary, fades to baseline) -->
       <path class="gauge-sector-fill" d="${sectorD}" fill="url(#gauge-fill-grad)" />
-      <!-- Glint: diagonal light stripe sweeping across the scored sector -->
-      <rect class="gauge-glint"
-            x="-70" y="0" width="55" height="${cy}"
-            fill="url(#gauge-glint-grad)"
-            clip-path="url(#gauge-sector-clip)"
-            pointer-events="none" />
+      <!-- Glint: sector path filled with animated sweep gradient -->
+      <path class="gauge-glint-path" d="${sectorD}"
+            fill="url(#gauge-sweep)" pointer-events="none" />
       <!-- Inner halo arc (thick soft glow just below the ember line) -->
       <path class="gauge-halo" d="M ${startX} ${cy} A ${r} ${r} 0 0 1 ${endX} ${cy}"
             stroke="rgba(${cr},${cg},${cb},0.14)" stroke-width="16" fill="none"
