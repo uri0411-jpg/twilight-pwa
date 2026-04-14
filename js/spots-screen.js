@@ -1436,17 +1436,6 @@ window.toggleSpot = function(i) {
   if (!el) return;
   const isOpen = el.classList.toggle('open');
   if (ch) ch.style.transform = isOpen ? 'rotate(180deg)' : '';
-  // Pan map to marker when opening
-  if (isOpen && _map && i < _markers.length) {
-    const m = _markers[i];
-    _map.flyTo({ center: m.getLngLat(), duration: 500 });
-    m.togglePopup();
-    const markerEl = m.getElement();
-    if (markerEl) {
-      markerEl.classList.add('spot-marker-pulse');
-      setTimeout(() => markerEl.classList.remove('spot-marker-pulse'), 800);
-    }
-  }
   // Lazy-load spot photo on first open
   if (isOpen) _loadSpotPhoto(i);
 };

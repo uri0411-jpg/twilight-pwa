@@ -3,9 +3,18 @@
 //  Geographic-first image resolution for map spots.
 //  Prefers COORDINATES over names so generic labels like "נקודת תצפית"
 //  still resolve to the actual spot, not some random photo sharing the name.
-//  Sources: OSM direct → Commons category → Commons geosearch 500m →
-//           Commons text search → Wikidata P18 → Wikipedia summary →
-//           Commons geosearch 2km → type-based local fallback.
+//
+//  Source chain (priority order):
+//    1. OSM direct image= tag
+//    2. Commons category (_commons OSM tag)
+//    3. Commons "Sunsets of Israel" category search
+//    4. Commons "Landscapes of Israel" category search (fallback)
+//    5. Commons geosearch 500m
+//    6. Commons text search (spot name + keywords)
+//    7. Wikidata P18 image claim
+//    8. Wikipedia REST summary
+//    9. Commons geosearch 2km
+//   10. Type-based local SVG fallback
 // ═══════════════════════════════════════════
 
 import { getCache, setCache } from './cache.js';
@@ -17,13 +26,20 @@ const THUMB_WIDTH    = 320;           // initial thumbnail width (px)
 const LANDSCAPE_KEYWORDS = [
   'sunset', 'sunrise', 'landscape', 'panorama', 'panoramic', 'view', 'viewpoint',
   'scenery', 'scenic', 'skyline', 'horizon', 'golden hour', 'dusk', 'twilight', 'dawn',
+  'nature', 'mountain', 'sea', 'clouds', 'outdoor', 'vista', 'overlook',
+  'coast', 'hilltop', 'evening', 'sky',
   'שקיעה', 'זריחה', 'נוף', 'פנורמה', 'תצפית', 'אופק',
 ];
 
 const NEGATIVE_KEYWORDS = [
   'map', 'diagram', 'logo', 'sign', 'plaque', 'icon', 'flag',
   'chart', 'aerial', 'satellite', 'svg', 'drawing', 'plan',
+  'building', 'architecture', 'street', 'urban', 'screenshot', 'webcam',
+  'monument', 'memorial', 'texture', 'pattern', 'coat of arms', 'emblem',
+  'museum', 'indoor', 'interior', 'stamp', 'coin', 'portrait',
 ];
+
+const WARM_COLORS = ['orange', 'pink', 'purple', 'golden', 'red'];
 
 // Type-based local fallback images (always available offline)
 const TYPE_FALLBACKS = {
@@ -60,12 +76,14 @@ export async function fetchSpotImage(spot) {
   let result = null;
   try {
     result =
-      (await tryDirectImageTag(spot))         ||
-      (await tryCommonsCategory(spot))        ||
-      (await tryCommonsGeosearch(spot, 500))  ||
-      (await tryCommonsTextSearch(spot))      ||
-      (await tryWikidataP18(spot))            ||
-      (await tryWikipediaSummary(spot))       ||
+      (await tryDirectImageTag(spot))           ||
+      (await tryCommonsCategory(spot))          ||
+      (await tryCommonsSunsetCategory(spot))    ||
+      (await tryCommonsLandscapeCategory(spot)) ||
+      (await tryCommonsGeosearch(spot, 500))    ||
+      (await tryCommonsTextSearch(spot))        ||
+      (await tryWikidataP18(spot))              ||
+      (await tryWikipediaSummary(spot))         ||
       (await tryCommonsGeosearch(spot, 2000));
   } catch (e) {
     console.warn('[spotImages] lookup failed:', e);
@@ -75,11 +93,11 @@ export async function fetchSpotImage(spot) {
   return result || tryTypeFallback(spot);
 }
 
-/** Cache key for a spot — coordinate-bound */
+/** Cache key for a spot — v2 prefix to invalidate old cached misses */
 function spotCacheKey(spot) {
   return spot._osmId
-    ? `spotimg_osm_${spot._osmId}`
-    : `spotimg_geo_${spot.lat.toFixed(4)}_${spot.lon.toFixed(4)}`;
+    ? `spotimg2_osm_${spot._osmId}`
+    : `spotimg2_geo_${spot.lat.toFixed(4)}_${spot.lon.toFixed(4)}`;
 }
 
 /** Invalidate cached image for a spot so next fetch retries the chain */
@@ -112,23 +130,46 @@ function scoreCandidate(page) {
   if (w < 200 || h < 150) return -Infinity;
 
   const ext = info.extmetadata || {};
+  const categories = (ext.Categories?.value || '').toLowerCase();
   const text = [
     page.title || '',
-    ext.Categories?.value || '',
+    categories,
     ext.ImageDescription?.value || '',
     ext.ObjectName?.value || '',
   ].join(' ').toLowerCase();
 
   let score = 0;
+
+  // Positive keyword matching
   for (const kw of LANDSCAPE_KEYWORDS) {
     if (text.includes(kw.toLowerCase())) score += 1;
   }
+
+  // Negative keyword matching (stronger penalty)
   for (const kw of NEGATIVE_KEYWORDS) {
-    if (text.includes(kw)) score -= 2;
+    if (text.includes(kw)) score -= 3;
   }
 
-  // Landscape orientation bonus
-  if (w > h) score += 2;
+  // Featured / Quality image bonuses
+  if (categories.includes('featured picture')) score += 5;
+  if (categories.includes('quality image'))    score += 3;
+
+  // Warm sunset color bonus (capped at +4)
+  let warmBonus = 0;
+  for (const color of WARM_COLORS) {
+    if (categories.includes(color)) { warmBonus += 2; if (warmBonus >= 4) break; }
+  }
+  score += warmBonus;
+
+  // Resolution bonus
+  const mp = (w * h) / 1_000_000;
+  if (mp > 5) score += 2;
+  else if (mp > 2) score += 1;
+
+  // Aspect ratio: prefer landscape orientation
+  const ratio = w / h;
+  if (ratio > 1.3) score += 2;
+  else if (ratio > 1.0) score += 1;
 
   return score;
 }
@@ -168,6 +209,34 @@ async function fetchImageInfo(titles) {
   return data?.query?.pages || null;
 }
 
+// ─── Shared Commons search helper ─────────────────────────────
+/** Search Commons files by srsearch query, score results, return best */
+async function commonsSearch(srsearch) {
+  const u = new URL('https://commons.wikimedia.org/w/api.php');
+  u.searchParams.set('action', 'query');
+  u.searchParams.set('list', 'search');
+  u.searchParams.set('srnamespace', '6');
+  u.searchParams.set('srsearch', srsearch);
+  u.searchParams.set('srlimit', '10');
+  u.searchParams.set('format', 'json');
+  u.searchParams.set('origin', '*');
+
+  const res = await fetchT(u.toString());
+  if (!res.ok) return null;
+  const data = await res.json();
+  const results = data?.query?.search;
+  if (!results?.length) return null;
+
+  const titles = results.map(r => r.title).filter(t => /\.(jpe?g|png)$/i.test(t));
+  const pages = await fetchImageInfo(titles);
+  if (!pages) return null;
+
+  const candidates = buildCandidates(pages);
+  const best = candidates[0];
+  if (!best) return null;
+  return { url: best.url, credit: best.credit, pageUrl: best.pageUrl, sourceLabel: 'ויקישיתוף' };
+}
+
 // ─── Source 2: Wikimedia Commons category (_commons tag) ──────
 async function tryCommonsCategory(spot) {
   if (!spot._commons) return null;
@@ -197,7 +266,28 @@ async function tryCommonsCategory(spot) {
   return { url: best.url, credit: best.credit, pageUrl: best.pageUrl, sourceLabel: 'ויקישיתוף' };
 }
 
-// ─── Source 3: Wikimedia Commons geosearch (geographic) ────────
+// ─── Source 3: Wikimedia "Sunsets of Israel" category ─────────
+async function tryCommonsSunsetCategory(spot) {
+  const name = spot._nameEn || spot.name;
+  // Try spot-specific sunset first, then general Israeli sunsets
+  if (name) {
+    const r = await commonsSearch(`incategory:"Sunsets of Israel" "${name}"`);
+    if (r) return r;
+  }
+  return commonsSearch('incategory:"Sunsets of Israel" sunset');
+}
+
+// ─── Source 4: Wikimedia "Landscapes of Israel" category ──────
+async function tryCommonsLandscapeCategory(spot) {
+  const name = spot._nameEn || spot.name;
+  if (name) {
+    const r = await commonsSearch(`incategory:"Landscapes of Israel" "${name}"`);
+    if (r) return r;
+  }
+  return commonsSearch('incategory:"Landscapes of Israel" landscape');
+}
+
+// ─── Source 5: Wikimedia Commons geosearch (geographic) ────────
 async function tryCommonsGeosearch(spot, radiusM) {
   const u = new URL('https://commons.wikimedia.org/w/api.php');
   u.searchParams.set('action', 'query');
@@ -224,38 +314,16 @@ async function tryCommonsGeosearch(spot, radiusM) {
   return { url: best.url, credit: best.credit, pageUrl: best.pageUrl, sourceLabel: 'ויקישיתוף' };
 }
 
-// ─── Source 4: Wikimedia Commons text search (topic-aware) ─────
+// ─── Source 6: Wikimedia Commons text search (topic-aware) ─────
 async function tryCommonsTextSearch(spot) {
   const name = spot._nameEn || spot.name;
   if (!name) return null;
-
-  const query = `"${name}" sunset OR sunrise OR landscape OR שקיעה OR נוף`;
-  const u = new URL('https://commons.wikimedia.org/w/api.php');
-  u.searchParams.set('action', 'query');
-  u.searchParams.set('list', 'search');
-  u.searchParams.set('srnamespace', '6');
-  u.searchParams.set('srsearch', query);
-  u.searchParams.set('srlimit', '10');
-  u.searchParams.set('format', 'json');
-  u.searchParams.set('origin', '*');
-
-  const res = await fetchT(u.toString());
-  if (!res.ok) return null;
-  const data = await res.json();
-  const results = data?.query?.search;
-  if (!results?.length) return null;
-
-  const titles = results.map(r => r.title).filter(t => /\.(jpe?g|png)$/i.test(t));
-  const pages = await fetchImageInfo(titles);
-  if (!pages) return null;
-
-  const candidates = buildCandidates(pages);
-  const best = candidates[0];
-  if (!best) return null;
-  return { url: best.url, credit: best.credit, pageUrl: best.pageUrl, sourceLabel: 'ויקישיתוף' };
+  return commonsSearch(
+    `"${name}" sunset OR sunrise OR landscape OR שקיעה OR נוף -map -diagram -aerial -logo -sign`
+  );
 }
 
-// ─── Source 5: Wikidata P18 image claim ─────────────────────────
+// ─── Source 7: Wikidata P18 image claim ─────────────────────────
 async function tryWikidataP18(spot) {
   if (!spot._wikidata) return null;
   const qid = spot._wikidata;
@@ -275,7 +343,7 @@ async function tryWikidataP18(spot) {
   };
 }
 
-// ─── Source 6: Wikipedia REST summary ───────────────────────────
+// ─── Source 8: Wikipedia REST summary ───────────────────────────
 async function tryWikipediaSummary(spot) {
   if (!spot._wikipedia) return null;
   const idx = spot._wikipedia.indexOf(':');
@@ -296,7 +364,7 @@ async function tryWikipediaSummary(spot) {
   };
 }
 
-// ─── Source 7 (fallback): type-based local image ────────────────
+// ─── Source 10 (fallback): type-based local image ───────────────
 function tryTypeFallback(spot) {
   const url = TYPE_FALLBACKS[spot.type] || DEFAULT_FALLBACK;
   return {
