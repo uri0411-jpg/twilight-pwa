@@ -11,7 +11,7 @@
 const BUILD_DATE  = '20260414'; // YYYYMMDD — update per deploy
 const CACHE_NAME  = 'twl-v' + BUILD_DATE; // auto-namespaces cache per deploy
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
-const MAX_TILES   = 500;         // ~12MB at ~25KB/tile — better cache hit rate for region
+const MAX_TILES   = 800;         // ~12MB at ~15KB/vector tile — better cache hit rate for region
 
 // Paths are relative — resolved against SW scope at install time
 const STATIC_ASSETS = [
@@ -68,8 +68,8 @@ const STATIC_ASSETS = [
   './js/data/ozone_climatology.js',
   './learning-seed.json',
   // Vendor — bundled locally for instant cache-first loading
-  './js/vendor/leaflet.js',
-  './css/leaflet.css',
+  './js/vendor/maplibre-gl.js',
+  './css/maplibre-gl.css',
   './css/images/layers.png',
   './css/images/layers-2x.png',
   './css/images/marker-icon.png',
@@ -131,8 +131,8 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET') return;
   if (url.protocol === 'chrome-extension:') return;
 
-  // Map tiles — stale-while-revalidate with capped cache (MAX_TILES)
-  if (url.hostname.includes('tile.openstreetmap.org') || url.hostname.includes('basemaps.cartocdn.com')) {
+  // Map tiles + vector resources — stale-while-revalidate with capped cache (MAX_TILES)
+  if (url.hostname.includes('tile.openstreetmap.org') || url.hostname.includes('basemaps.cartocdn.com') || url.hostname.includes('fonts.openmaptiles.org')) {
     event.respondWith(staleWhileRevalidateTile(request));
     return;
   }
@@ -157,7 +157,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Vendor files (Leaflet) — cache-first, they are versioned and rarely change.
+  // Vendor files (MapLibre GL) — cache-first, they are versioned and rarely change.
   const path = url.pathname;
   if (path.includes('/vendor/') || path.includes('/css/images/')) {
     event.respondWith(cacheFirst(request));

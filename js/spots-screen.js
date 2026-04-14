@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════
-//  TWILIGHT — spots-screen.js v5
-//  Cinematic: warm map filter, haptic
+//  TWILIGHT — spots-screen.js v6
+//  MapLibre GL JS vector map, haptic
 // ═══════════════════════════════════════════
 
 import { fetchSpots, fetchCityName } from './api.js';
@@ -26,46 +26,46 @@ let _map          = null;
 let _mapEl        = null; // detachable map container element
 let _userMarker   = null;
 let _markers      = [];
-let _sunsetLines  = [];
 let _markerSpotMap = {};
 let _popupHandlerRegistered = false;
+let _mapStyleLoaded = false; // tracks whether MapLibre style 'load' has fired
 let _loc          = null;
 let _weekData     = null;
 let _favorites    = loadFavorites();
 let _visited      = loadVisited();
-let _leafletReady = false;
+let _mlReady      = false;
 let _visibleCount = 15;
 let _loadingSpots = false; // guard against parallel loadSpots() calls
 let _searchCleanup = null;
 
 // ─────────────────────────────────────────
-//  Lazy-load Leaflet CSS + JS on demand
+//  Lazy-load MapLibre GL JS CSS + JS on demand
 //  Bundled locally → served cache-first by SW (no CDN latency)
 // ─────────────────────────────────────────
-let _leafletLoadPromise = null; // dedup guard — only one load in-flight
-function loadLeaflet() {
-  if (_leafletReady || typeof L !== 'undefined') { _leafletReady = true; return Promise.resolve(); }
-  if (_leafletLoadPromise) return _leafletLoadPromise;
-  _leafletLoadPromise = new Promise((resolve, reject) => {
+let _mlLoadPromise = null; // dedup guard — only one load in-flight
+function loadMapLibre() {
+  if (_mlReady || typeof maplibregl !== 'undefined') { _mlReady = true; return Promise.resolve(); }
+  if (_mlLoadPromise) return _mlLoadPromise;
+  _mlLoadPromise = new Promise((resolve, reject) => {
     // CSS — only add if not already in DOM
-    if (!document.querySelector('link[href*="leaflet.css"]')) {
+    if (!document.querySelector('link[href*="maplibre-gl.css"]')) {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = './css/leaflet.css';
+      link.href = './css/maplibre-gl.css';
       document.head.appendChild(link);
     }
 
     // JS — only add if not already in DOM
-    if (document.querySelector('script[src*="vendor/leaflet"]')) {
-      _leafletReady = true; resolve(); return;
+    if (document.querySelector('script[src*="vendor/maplibre-gl"]')) {
+      _mlReady = true; resolve(); return;
     }
     const script = document.createElement('script');
-    script.src = './js/vendor/leaflet.js';
-    script.onload  = () => { _leafletReady = true; resolve(); };
-    script.onerror = () => { _leafletLoadPromise = null; reject(new Error('Leaflet load failed')); };
+    script.src = './js/vendor/maplibre-gl.js';
+    script.onload  = () => { _mlReady = true; resolve(); };
+    script.onerror = () => { _mlLoadPromise = null; reject(new Error('MapLibre load failed')); };
     document.head.appendChild(script);
   });
-  return _leafletLoadPromise;
+  return _mlLoadPromise;
 }
 
 // ─── Favorites ───────────────────────────
@@ -332,10 +332,10 @@ export async function preloadSpotsData(weekData, loc) {
 
 // ─── Tile prefetch: preload map tiles for user's area on idle ───
 export function prefetchAreaTiles(lat, lon) {
-  const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  // Prefetch CARTO vector tiles for user's area
   const SUBDOMAINS = ['a', 'b', 'c', 'd'];
-  const ZOOMS = [10, 11, 12, 13];
-  const RADIUS = 2; // tiles around center in each direction
+  const ZOOMS = [9, 10, 11, 12, 13];
+  const RADIUS = 3; // tiles around center in each direction
 
   function lat2tile(lat, z) { return Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * (1 << z)); }
   function lon2tile(lon, z) { return Math.floor((lon + 180) / 360 * (1 << z)); }
@@ -347,7 +347,7 @@ export function prefetchAreaTiles(lat, lon) {
       for (let dy = -RADIUS; dy <= RADIUS; dy++) {
         const x = cx + dx, y = cy + dy;
         const s = SUBDOMAINS[(x + y) % SUBDOMAINS.length];
-        urls.push(TILE_URL.replace('{s}', s).replace('{z}', z).replace('{x}', x).replace('{y}', y).replace('{r}', ''));
+        urls.push(`https://tiles-${s}.basemaps.cartocdn.com/vectortiles/carto.streets/v1/${z}/${x}/${y}.mvt`);
       }
     }
   }
@@ -355,9 +355,9 @@ export function prefetchAreaTiles(lat, lon) {
   // Fetch in small batches to avoid flooding the network
   let i = 0;
   function fetchBatch() {
-    const batch = urls.slice(i, i + 4);
+    const batch = urls.slice(i, i + 6);
     if (!batch.length) return;
-    i += 4;
+    i += 6;
     Promise.allSettled(batch.map(u => fetch(u, { mode: 'no-cors' }))).then(() => {
       if (typeof requestIdleCallback === 'function') {
         requestIdleCallback(fetchBatch, { timeout: 5000 });
@@ -465,7 +465,7 @@ export async function initSpotsScreen(weekData) {
   const container = document.getElementById('screen-spots');
   if (!container) return;
 
-  // Detach existing map element before rebuilding the shell so Leaflet
+  // Detach existing map element before rebuilding the shell so MapLibre
   // instance survives. We'll reattach it into the new #spot-map-wrap.
   const reuseMap = !!(_map && _mapEl);
   if (reuseMap) _mapEl.remove(); // detach from old DOM, not destroyed
@@ -479,17 +479,17 @@ export async function initSpotsScreen(weekData) {
     const placeholder = document.getElementById('spots-map');
     if (wrap && placeholder) {
       wrap.replaceChild(_mapEl, placeholder);
-      _map.invalidateSize();
+      _map.resize();
       // Update user marker position if location changed
       const lat = _loc?.lat || 32.0853, lon = _loc?.lon || 34.7818;
-      if (_userMarker) _userMarker.setLatLng([lat, lon]);
-      _map.setView([lat, lon], _map.getZoom());
+      if (_userMarker) _userMarker.setLngLat([lon, lat]);
+      _map.jumpTo({ center: [lon, lat], zoom: _map.getZoom() });
       drawEventArc();
       if (_spots.length) updateMapMarkers(getFilteredSpots());
     }
   } else {
-    if (_map) { _map.remove(); _map = null; _mapEl = null; _userMarker = null; _markers = []; _popupHandlerRegistered = false; }
-    initLeafletMap();
+    if (_map) { _map.remove(); _map = null; _mapEl = null; _userMarker = null; _markers = []; _popupHandlerRegistered = false; _mapStyleLoaded = false; }
+    initMap();
   }
 
   if (!_loc) { showToast('לא נמצא מיקום — לחץ GPS', 'error'); return; }
@@ -537,7 +537,7 @@ function buildSpotsShell() {
 
     <!-- Map -->
     <div class="glass spot-map-wrap" id="spot-map-wrap">
-      <div id="spots-map" style="height:280px;width:100%;border-radius:18px"></div>
+      <div id="spots-map" style="height:280px;width:100%;border-radius:18px"><div style="height:100%;display:flex;align-items:center;justify-content:center;color:var(--cream-faint);font-size:12px">טוען מפה...</div></div>
       <button class="spot-map-expand-btn" id="map-expand-btn" title="הגדל מפה">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
       </button>
@@ -574,34 +574,37 @@ function buildSpotsShell() {
 }
 
 // ═════════════════════════════════════════
-//  MAP
+//  MAP (MapLibre GL JS)
 // ═════════════════════════════════════════
-async function initLeafletMap() {
+async function initMap() {
   if (_map) return; // already initialized — guard against stale retry timers
   try {
-    await loadLeaflet();
+    await loadMapLibre();
   } catch (e) {
-    console.warn('[map] Leaflet load failed, retrying in 2s:', e.message);
-    setTimeout(initLeafletMap, 2000);
+    console.warn('[map] MapLibre load failed, retrying in 2s:', e.message);
+    setTimeout(initMap, 2000);
     return;
   }
-  if (_map) return; // another call completed while we were loading Leaflet
+  if (_map) return; // another call completed while we were loading MapLibre
   const el = document.getElementById('spots-map');
   if (!el) return;
   const lat = _loc?.lat || 32.0853, lon = _loc?.lon || 34.7818;
-  _map = L.map('spots-map', { zoomControl: false }).setView([lat, lon], 11);
-  _mapEl = _map.getContainer();
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://carto.com">CARTO</a> | &copy; <a href="https://osm.org/copyright">OSM</a>',
-    subdomains: 'abcd',
-    maxZoom: 20,
-    maxNativeZoom: 19
-  }).addTo(_map);
-  const userIcon = L.divIcon({
-    html: '<div style="width:14px;height:14px;background:#F0B84A;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(240,184,74,0.9);animation:pulse 1.5s ease-in-out infinite"></div>',
-    iconSize: [14, 14], iconAnchor: [7, 7], className: ''
+  _map = new maplibregl.Map({
+    container: 'spots-map',
+    style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    center: [lon, lat],
+    zoom: 11,
+    attributionControl: true
   });
-  _userMarker = L.marker([lat, lon], { icon: userIcon }).addTo(_map).bindPopup('המיקום שלך');
+  _mapEl = _map.getContainer();
+
+  // User marker — pulsing gold dot
+  const userEl = document.createElement('div');
+  userEl.innerHTML = '<div style="width:14px;height:14px;background:#F0B84A;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(240,184,74,0.9);animation:pulse 1.5s ease-in-out infinite"></div>';
+  _userMarker = new maplibregl.Marker({ element: userEl, anchor: 'center' })
+    .setLngLat([lon, lat])
+    .setPopup(new maplibregl.Popup({ offset: 10 }).setText('המיקום שלך'))
+    .addTo(_map);
 
   // Delegated click handler — attach ONCE as soon as the map container exists,
   // independent of whether spot markers have been drawn yet. This fires reliably
@@ -617,15 +620,16 @@ async function initLeafletMap() {
     });
   }
 
-  drawEventArc();
-  // If spots already loaded before the map was ready, draw their markers now.
-  if (_spots.length) updateMapMarkers(getFilteredSpots());
+  _map.on('load', () => {
+    _mapStyleLoaded = true;
+    drawEventArc();
+    // If spots already loaded before the map was ready, draw their markers now.
+    if (_spots.length) updateMapMarkers(getFilteredSpots());
+  });
 }
 
 function drawEventArc() {
-  if (!_map || !_loc) return;
-  _sunsetLines.forEach(l => l.remove());
-  _sunsetLines = [];
+  if (!_map || !_loc || !_mapStyleLoaded) return;
   const nextEvt = getNextEvent();
   const az = nextEvt.azimuth;
   const color = nextEvt.type === 'sunset' ? '#F0B84A' : '#E87830';
@@ -633,12 +637,34 @@ function drawEventArc() {
   const main = destPoint(_loc.lat, _loc.lon, az, dist);
   const left = destPoint(_loc.lat, _loc.lon, az - 30, dist);
   const right = destPoint(_loc.lat, _loc.lon, az + 30, dist);
-  const origin = [_loc.lat, _loc.lon];
-  _sunsetLines.push(
-    L.polyline([origin, [main.lat, main.lon]], { color, weight: 2, dashArray: '8,6', opacity: 0.7 }).addTo(_map),
-    L.polyline([origin, [left.lat, left.lon]], { color, weight: 1.2, dashArray: '4,8', opacity: 0.25 }).addTo(_map),
-    L.polyline([origin, [right.lat, right.lon]], { color, weight: 1.2, dashArray: '4,8', opacity: 0.25 }).addTo(_map)
-  );
+  const origin = [_loc.lon, _loc.lat];
+
+  const geojson = {
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', properties: { w: 2, op: 0.7, dash: [8, 6] }, geometry: { type: 'LineString', coordinates: [origin, [main.lon, main.lat]] } },
+      { type: 'Feature', properties: { w: 1.2, op: 0.25, dash: [4, 8] }, geometry: { type: 'LineString', coordinates: [origin, [left.lon, left.lat]] } },
+      { type: 'Feature', properties: { w: 1.2, op: 0.25, dash: [4, 8] }, geometry: { type: 'LineString', coordinates: [origin, [right.lon, right.lat]] } }
+    ]
+  };
+
+  if (_map.getSource('sunset-arc')) {
+    _map.getSource('sunset-arc').setData(geojson);
+    _map.setPaintProperty('sunset-arc-main', 'line-color', color);
+    _map.setPaintProperty('sunset-arc-side', 'line-color', color);
+  } else {
+    _map.addSource('sunset-arc', { type: 'geojson', data: geojson });
+    _map.addLayer({
+      id: 'sunset-arc-main', type: 'line', source: 'sunset-arc',
+      filter: ['==', ['get', 'op'], 0.7],
+      paint: { 'line-color': color, 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [8, 6] }
+    });
+    _map.addLayer({
+      id: 'sunset-arc-side', type: 'line', source: 'sunset-arc',
+      filter: ['==', ['get', 'op'], 0.25],
+      paint: { 'line-color': color, 'line-width': 1.2, 'line-opacity': 0.25, 'line-dasharray': [4, 8] }
+    });
+  }
 }
 
 function updateMapMarkers(spots) {
@@ -659,15 +685,15 @@ function updateMapMarkers(spots) {
     const size = isFav ? 18 : 14;
     const border = isVis ? '2px solid rgba(125,212,168,0.8)' : '2px solid rgba(255,255,255,0.6)';
     const num = idx + 1;
-    const spotIcon = L.divIcon({
-      html: `<div class="spot-marker-num" style="width:${size}px;height:${size}px;background:${markerColor};border:${border};border-radius:50%;box-shadow:0 0 8px ${markerColor}88;display:flex;align-items:center;justify-content:center;font-size:${isFav ? 9 : 8}px;font-weight:800;color:#fff;font-family:Rubik,sans-serif;line-height:1">${num}</div>`,
-      iconSize: [size, size], iconAnchor: [size/2, size/2], className: ''
-    });
+    const markerEl = document.createElement('div');
+    markerEl.innerHTML = `<div class="spot-marker-num" style="width:${size}px;height:${size}px;background:${markerColor};border:${border};border-radius:50%;box-shadow:0 0 8px ${markerColor}88;display:flex;align-items:center;justify-content:center;font-size:${isFav ? 9 : 8}px;font-weight:800;color:#fff;font-family:Rubik,sans-serif;line-height:1">${num}</div>`;
     const eventLabel = nextEvt.type === 'sunrise' ? 'זריחה' : 'שקיעה';
     const popupContent = `<div dir="rtl" style="font-family:Rubik,sans-serif;font-size:13px"><b>${esc(s.name)}</b><br>${esc(s.type)} · ${fmtScore(sc)} · ${s.dist} ק"מ<br><span style="color:${scoreToBarStyle(eventScore, _weekData?.[0]?.skyColors).scoreColor}">${eventLabel}: ${fmtScore(eventScore)}</span><br><a href="#" class="spot-popup-link" data-spot-idx="${idx}" style="color:#F0B84A;font-size:11px;text-decoration:underline">הצג פרטים ↓</a></div>`;
-    const m = L.marker([s.lat, s.lon], { icon: spotIcon })
-      .addTo(_map)
-      .bindPopup(popupContent);
+    const popup = new maplibregl.Popup({ offset: 10, closeButton: true }).setHTML(popupContent);
+    const m = new maplibregl.Marker({ element: markerEl, anchor: 'center' })
+      .setLngLat([s.lon, s.lat])
+      .setPopup(popup)
+      .addTo(_map);
     m._spotIdx = idx;
     _markers.push(m);
     _markerSpotMap[spotKey(s.name, s.lat)] = idx;
@@ -1280,8 +1306,8 @@ function attachSpotsEvents() {
       onSelect: (result) => {
         _loc = { lat: result.lat, lon: result.lon, city: result.city };
         saveLocation(result.lat, result.lon, result.city);
-        if (_map) _map.setView([result.lat, result.lon], 11);
-        if (_userMarker) _userMarker.setLatLng([result.lat, result.lon]);
+        if (_map) _map.jumpTo({ center: [result.lon, result.lat], zoom: 11 });
+        if (_userMarker) _userMarker.setLngLat([result.lon, result.lat]);
         // Apply type filter if detected from original query
         if (result._detectedType) {
           _filterType = result._detectedType;
@@ -1311,8 +1337,8 @@ function attachSpotsEvents() {
           const city = await fetchCityName(pos.lat, pos.lon);
           saveLocation(pos.lat, pos.lon, city);
           showToast(`מעדכן תחזית ל: ${city}`, 'info');
-          if (_map) _map.setView([pos.lat, pos.lon], 11);
-          if (_userMarker) _userMarker.setLatLng([pos.lat, pos.lon]);
+          if (_map) _map.jumpTo({ center: [pos.lon, pos.lat], zoom: 11 });
+          if (_userMarker) _userMarker.setLngLat([pos.lon, pos.lat]);
           window.dispatchEvent(new CustomEvent('twilight:setLocation', {
             detail: { lat: pos.lat, lon: pos.lon, city }
           }));
@@ -1331,7 +1357,7 @@ function attachSpotsEvents() {
     if (btn) btn.innerHTML = expanding
       ? '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>'
       : '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
-    setTimeout(() => { if (_map) _map.invalidateSize(); }, 320);
+    setTimeout(() => { if (_map) _map.resize(); }, 320);
   });
 
   document.getElementById('sort-smart')?.addEventListener('click', () => { haptic('light'); setSortMode('smart'); });
@@ -1387,8 +1413,8 @@ window.toggleSpot = function(i) {
   // Pan map to marker when opening
   if (isOpen && _map && i < _markers.length) {
     const m = _markers[i];
-    _map.panTo(m.getLatLng(), { animate: true, duration: 0.5 });
-    m.openPopup();
+    _map.flyTo({ center: m.getLngLat(), duration: 500 });
+    m.togglePopup();
     const markerEl = m.getElement();
     if (markerEl) {
       markerEl.classList.add('spot-marker-pulse');
@@ -1455,4 +1481,4 @@ window._shareSpot = function(i) {
   }).catch(() => {});
 };
 
-// ✓ spots-screen.js v5 — complete
+// ✓ spots-screen.js v6 — MapLibre GL JS vector map
