@@ -141,27 +141,31 @@ function _updateLiveScoreColors(skyColors, mainScore) {
     }
   }
 
-  // 4. Score badges — neon palette matching weekly forecast bars
+  // 4. Score badges — transparent wash + ember accent
   for (const el of document.querySelectorAll('.score-badge:not(.score-badge-location)')) {
     const span = el.querySelector('span');
     const s = span ? parseFloat(span.textContent) : NaN;
     if (!isNaN(s)) {
       const bs = scoreToBarStyle(s, skyColors);
       const [nr, ng, nb] = bs.scoreColorRgb.split(',').map(Number);
+      el.style.setProperty('--score-color-rgb', bs.scoreColorRgb);
       el.style.color = 'rgba(255,255,255,0.97)';
-      el.style.borderColor = bs.scoreColor + '55';
-      el.style.background = `linear-gradient(to bottom,rgba(${nr},${ng},${nb},0.40) 0%,rgba(${Math.round(nr*0.55)},${Math.round(ng*0.20)},0,0.55) 100%)`;
-      el.style.filter = 'saturate(1.45) brightness(1.18)';
-      el.style.borderTopColor = 'rgba(255,255,255,0.30)';
+      el.style.border = `1px solid rgba(${nr},${ng},${nb},0.25)`;
+      el.style.background = `linear-gradient(to bottom,rgba(${nr},${ng},${nb},0.15) 0%,rgba(${nr},${ng},${nb},0.06) 100%)`;
+      el.style.filter = '';
     }
   }
 
-  // 5. Spot color strips + hero strips — background
+  // 5. Spot color strips + hero strips — background + --score-color-rgb for glow
   for (const el of document.querySelectorAll('.spot-color-strip, .spot-hero-strip')) {
     const card = el.closest('.spot-card, .spot-hero');
     const scoreEl = card?.querySelector('.score-badge:not(.score-badge-location) span');
     const s = scoreEl ? parseFloat(scoreEl.textContent) : NaN;
-    if (!isNaN(s)) el.style.background = scoreToBarStyle(s, skyColors).scoreColor;
+    if (!isNaN(s)) {
+      const bs = scoreToBarStyle(s, skyColors);
+      el.style.background = bs.scoreColor;
+      el.style.setProperty('--score-color-rgb', bs.scoreColorRgb);
+    }
   }
 
   // 6. Spot mini week bar fills — set --score-color-rgb on parent track
@@ -1335,7 +1339,7 @@ function renderDailyCards(weekData) {
     const ds = (_spotAvgScores != null && _spotAvgScores[i] != null) ? _spotAvgScores[i] : d.score;
     const dsBarStyle = scoreToBarStyle(ds, d.skyColors);
     const [dnr, dng, dnb] = dsBarStyle.scoreColorRgb.split(',').map(Number);
-    const dsBadgeBg  = `linear-gradient(to bottom,rgba(${dnr},${dng},${dnb},0.40) 0%,rgba(${Math.round(dnr*0.55)},${Math.round(dng*0.20)},0,0.55) 100%)`;
+    const dsBadgeBg  = `linear-gradient(to bottom,rgba(${dnr},${dng},${dnb},0.15) 0%,rgba(${dnr},${dng},${dnb},0.06) 100%)`;
     const dsWcBg     = getWatercolorBg(ds);
     return `
     <div class="glass daily-card" style="margin-bottom:8px">
@@ -1343,7 +1347,7 @@ function renderDailyCards(weekData) {
       <!-- HEADER -->
       <div class="daily-header" onclick="toggleDaily(${i})" style="cursor:pointer;padding:14px 16px">
         <div style="display:flex;align-items:center;gap:10px">
-          <div class="score-badge" style="background:${dsBadgeBg};border:1px solid ${dsBarStyle.scoreColor}55;border-top:1px solid rgba(255,255,255,0.30);color:rgba(255,255,255,0.97);filter:saturate(1.45) brightness(1.18);position:relative;overflow:hidden" ${ds >= 7 ? 'data-shimmer' : ''}><div class="score-badge-wc" style="background-image:url(${dsWcBg})"></div><span style="position:relative;z-index:3;font-size:13px;text-shadow:0 0 8px rgba(255,255,255,0.6),0 1px 3px rgba(0,0,0,0.80)">${ds.toFixed(1)}</span></div>
+          <div class="score-badge" style="--score-color-rgb:${dsBarStyle.scoreColorRgb};background:${dsBadgeBg};border:1px solid rgba(${dnr},${dng},${dnb},0.25);color:rgba(255,255,255,0.97);position:relative;overflow:hidden" ${ds >= 7 ? 'data-shimmer' : ''}><div class="score-badge-wc" style="background-image:url(${dsWcBg})"></div><span style="position:relative;z-index:3;font-size:13px;text-shadow:0 0 8px rgba(255,255,255,0.6),0 1px 3px rgba(0,0,0,0.80)">${ds.toFixed(1)}</span></div>
           <div>
             <div style="font-weight:700;font-size:15px;color:var(--cream)">${d.day} · ${d.shortDate}</div>
             <div style="font-size:11px;color:var(--cream-faint)">${d.cond}</div>

@@ -630,10 +630,10 @@ export function buildGaugeArc(score, color, size = 120) {
             stroke-linecap="round"
             stroke-dasharray="0 ${totalArc}"
             data-arc-target="${arcTarget}"
-            style="filter:drop-shadow(0 0 8px ${color}8C) drop-shadow(0 0 18px ${color}33) drop-shadow(0 0 40px ${color}12);transition:stroke-dasharray 1.1s cubic-bezier(0.22,1,0.36,1)" />
+            style="filter:drop-shadow(0 0 6px ${color}66) drop-shadow(0 0 14px ${color}22);transition:stroke-dasharray 1.1s cubic-bezier(0.22,1,0.36,1)" />
       <text class="gauge-score-text" x="${cx}" y="${cy - 8}" text-anchor="middle"
             font-family="var(--font-title)" font-size="32" font-weight="900"
-            fill="${color}" style="filter:drop-shadow(0 0 8px ${color}8C) drop-shadow(0 0 18px ${color}33) drop-shadow(0 0 40px ${color}12) drop-shadow(0 2px 4px rgba(0,0,0,0.80))">
+            fill="${color}" style="filter:drop-shadow(0 0 6px ${color}66) drop-shadow(0 0 14px ${color}22) drop-shadow(0 2px 4px rgba(0,0,0,0.80))">
         ${displayScore}
       </text>
       <text x="${cx}" y="${cy + 10}" text-anchor="middle"

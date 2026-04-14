@@ -784,67 +784,50 @@ body.has-install-banner .screen { padding-top: 56px; }
 .gauge-arc-fill {
   animation: arcDraw 0.9s ease 0.15s both;
 }
-/* Primary glow ring — continuous score color */
+/* Semicircular wash under arc — transparent color aura */
 .score-gauge-wrap::before {
   content: '';
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -55%) scale(1);
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(var(--score-color-rgb), 0.35) 0%, transparent 70%);
-  opacity: 0.6;
-  animation: breathe 3s ease-in-out infinite;
+  transform: translate(-50%, -55%);
+  width: 120px;
+  height: 60px;
+  border-radius: 60px 60px 0 0;
+  background: radial-gradient(
+    ellipse 100% 80% at 50% 100%,
+    rgba(var(--score-color-rgb), 0.20) 0%,
+    rgba(var(--score-color-rgb), 0.08) 50%,
+    transparent 100%
+  );
   pointer-events: none;
   z-index: -1;
-  will-change: opacity, transform;
 }
-/* Aurora ellipse layer — offset for depth */
+/* Ember accent line under arc */
 .score-gauge-wrap::after {
   content: '';
   position: absolute;
-  width: 170px;
-  height: 80px;
-  top: 38%;
+  top: 55%;
   left: 50%;
-  transform: translateX(-50%) rotate(-12deg);
-  background: radial-gradient(ellipse at center, rgba(var(--score-color-rgb), 0.25) 0%, transparent 70%);
-  filter: blur(22px);
-  animation: gaugeGlowPulse 5s ease-in-out infinite 1.8s;
+  transform: translateX(-50%);
+  width: 80%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right,
+    transparent, rgba(var(--score-color-rgb), 0.6), transparent);
+  box-shadow:
+    0 0 10px rgba(var(--score-color-rgb), 0.4),
+    0 0 25px rgba(var(--score-color-rgb), 0.15);
   pointer-events: none;
   z-index: -1;
-  will-change: opacity, transform;
 }
-/* High score = strong warm glow */
-.score-gauge-wrap[data-score-tier="high"]::before {
-  width: 150px; height: 150px;
-  opacity: 0.95;
-  animation: gaugeGlowPulse 2.2s ease-in-out infinite;
-}
-.score-gauge-wrap[data-score-tier="high"]::after {
-  animation: gaugeGlowPulse 5.5s ease-in-out infinite 2s;
-  opacity: 0.7;
-}
-/* Mid score = moderate glow */
-.score-gauge-wrap[data-score-tier="mid"]::before {
-  width: 130px; height: 130px;
-  opacity: 0.75;
-  animation: gaugeGlowPulse 3.2s ease-in-out infinite;
-}
-.score-gauge-wrap[data-score-tier="mid"]::after {
-  opacity: 0.45;
-}
-/* Low score = dim glow */
-.score-gauge-wrap[data-score-tier="low"]::before {
-  width: 110px; height: 110px;
-  opacity: 0.55;
-  animation: gaugeGlowPulse 4.5s ease-in-out infinite;
-}
-.score-gauge-wrap[data-score-tier="low"]::after {
-  opacity: 0.30;
-}
+/* Tier intensity — only opacity changes */
+.score-gauge-wrap[data-score-tier="high"]::before { opacity: 1; }
+.score-gauge-wrap[data-score-tier="high"]::after  { opacity: 1; }
+.score-gauge-wrap[data-score-tier="mid"]::before  { opacity: 0.65; }
+.score-gauge-wrap[data-score-tier="mid"]::after   { opacity: 0.65; }
+.score-gauge-wrap[data-score-tier="low"]::before  { opacity: 0.35; }
+.score-gauge-wrap[data-score-tier="low"]::after   { opacity: 0.35; }
 .score-desc {
   font-size: 12px;
   color: var(--gold-light);
@@ -1493,17 +1476,17 @@ body.has-install-banner .screen { padding-top: 56px; }
   transition: transform 0.2s ease, box-shadow 0.3s ease;
 }
 .score-badge:active { transform: scale(0.95); }
-/* Liquid surface glow — same as week-bar-fill::before */
+/* Ember top line — matches week-bar ember language */
 .score-badge::before {
   content: '';
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background:
-    radial-gradient(ellipse 75% 35% at 50% 5%, rgba(255,255,255,0.72) 0%, rgba(255,235,160,0.45) 22%, rgba(255,160,50,0.15) 55%, transparent 100%),
-    radial-gradient(ellipse 55% 45% at 50% 55%, rgba(255,200,80,0.18) 0%, transparent 70%);
+  top: 0; left: 10%; width: 80%; height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right,
+    transparent, rgba(255, 230, 180, 0.85), transparent);
+  box-shadow: 0 0 6px rgba(var(--score-color-rgb, 212, 130, 10), 0.5);
+  z-index: 4;
   pointer-events: none;
-  z-index: 1;
 }
 /* Watercolor texture layer */
 .score-badge-wc {
@@ -2003,6 +1986,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   height: 100%;
   border-radius: 0 18px 18px 0;
   z-index: 2;
+  box-shadow: -4px 0 12px rgba(var(--score-color-rgb, 212, 130, 10), 0.3);
 }
 .spot-hero-inner {
   padding: 16px;
@@ -2066,6 +2050,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   height: 100%;
   border-radius: 0 18px 18px 0;
   z-index: 2;
+  box-shadow: -4px 0 12px rgba(var(--score-color-rgb, 212, 130, 10), 0.3);
 }
 .spot-card-inner { position: relative; }
 
@@ -2459,16 +2444,28 @@ body.has-install-banner .screen { padding-top: 56px; }
   left: 0;
   right: 0;
   min-height: 15%;
-  background: rgba(255, 255, 255, 0.01);
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--score-color-rgb, 255, 100, 0), 0.22) 0%,
+    rgba(var(--score-color-rgb, 255, 100, 0), 0.08) 50%,
+    rgba(var(--score-color-rgb, 255, 100, 0), 0.02) 100%
+  );
   box-shadow:
-    inset 0 0 25px rgba(var(--score-color-rgb, 255, 100, 0), 0.9),
-    inset 0 0 60px rgba(var(--score-color-rgb, 255, 100, 0), 0.4),
-    0 0 15px rgba(var(--score-color-rgb, 255, 100, 0), 0.6);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  mix-blend-mode: color-dodge;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+    inset 6px 0 12px -4px rgba(var(--score-color-rgb, 255, 100, 0), 0.20),
+    inset -6px 0 12px -4px rgba(var(--score-color-rgb, 255, 100, 0), 0.20);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   transition: height 0.6s cubic-bezier(0.33, 1, 0.68, 1);
+  overflow: hidden;
+}
+.spot-week-bar-fill::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 10%; width: 80%; height: 1px;
+  border-radius: 1px;
+  background: linear-gradient(to right,
+    transparent, rgba(var(--score-color-rgb, 255, 100, 0), 0.8), transparent);
+  box-shadow: 0 0 6px rgba(var(--score-color-rgb, 255, 100, 0), 0.5);
+  pointer-events: none;
 }
 .spot-week-bar-label {
   font-size: 9px;
@@ -2954,6 +2951,7 @@ a:focus-visible,
 .event-score-panel--twilight {
   background: rgba(var(--score-color-rgb, 212, 130, 10), 0.08);
   border-color: rgba(var(--score-color-rgb, 212, 130, 10), 0.22);
+  box-shadow: inset 0 0 15px rgba(var(--score-color-rgb, 212, 130, 10), 0.06);
 }
 .event-score-num    { font-size: 20px; font-weight: 900; font-family: var(--font-title); line-height: 1; }
 .event-score-denom  { font-size: 11px; font-weight: 400; color: var(--cream-faint); }

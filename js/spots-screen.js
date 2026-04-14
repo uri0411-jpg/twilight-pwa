@@ -884,7 +884,7 @@ function renderBestSpotHero() {
 
   heroEl.innerHTML = `
   <div class="glass-strong spot-hero" style="--spot-color:${heroColor}">
-    <div class="spot-hero-strip" style="background:${scoreToBarStyle(sc.combined, _weekData?.[0]?.skyColors).scoreColor}"></div>
+    <div class="spot-hero-strip" style="background:${scoreToBarStyle(sc.combined, _weekData?.[0]?.skyColors).scoreColor};--score-color-rgb:${scoreToBarStyle(sc.combined, _weekData?.[0]?.skyColors).scoreColorRgb}"></div>
     <div class="spot-hero-inner">
       <div class="spot-hero-top">
         <div style="font-size:10px;color:var(--gold);font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">${heroTitle}</div>
@@ -1095,7 +1095,7 @@ function renderSpotsList() {
 
     return `
     <div class="glass spot-card spot-card-anim" style="--spot-color:${cardColor};--anim-delay:${i * 60}ms">
-      <div class="spot-color-strip" style="background:${scoreToBarStyle(sc.combined, _weekData?.[0]?.skyColors).scoreColor}"></div>
+      <div class="spot-color-strip" style="background:${scoreToBarStyle(sc.combined, _weekData?.[0]?.skyColors).scoreColor};--score-color-rgb:${scoreToBarStyle(sc.combined, _weekData?.[0]?.skyColors).scoreColorRgb}"></div>
       <div class="spot-card-inner">
         <div class="spot-header" onclick="toggleSpot(${i})">
           <div class="spot-header-right">
