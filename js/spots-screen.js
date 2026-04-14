@@ -588,6 +588,16 @@ async function initMap() {
   if (_map) return; // another call completed while we were loading MapLibre
   const el = document.getElementById('spots-map');
   if (!el) return;
+
+  // Enable Hebrew (RTL) text rendering — must be called before map creation.
+  // Guard against "cannot be called multiple times" error on re-init.
+  try {
+    maplibregl.setRTLTextPlugin(
+      'https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.2.3/mapbox-gl-rtl-text.min.js',
+      true // lazy-load
+    );
+  } catch (_) { /* already set */ }
+
   const lat = _loc?.lat || 32.0853, lon = _loc?.lon || 34.7818;
   _map = new maplibregl.Map({
     container: 'spots-map',
@@ -622,6 +632,17 @@ async function initMap() {
 
   _map.on('load', () => {
     _mapStyleLoaded = true;
+
+    // Prefer Hebrew names on all label layers (CARTO defaults to name:latin).
+    try {
+      _map.getStyle().layers.forEach(layer => {
+        if (layer.layout?.['text-field']) {
+          _map.setLayoutProperty(layer.id, 'text-field',
+            ['coalesce', ['get', 'name:he'], ['get', 'name']]);
+        }
+      });
+    } catch (_) { /* style may not support per-layer override */ }
+
     drawEventArc();
     // If spots already loaded before the map was ready, draw their markers now.
     if (_spots.length) updateMapMarkers(getFilteredSpots());
