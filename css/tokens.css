@@ -162,8 +162,8 @@
   --twl-color-glass-edge-highlight: rgba(255, 255, 255, 0.80);
   --twl-layer-sky: 0;
   --twl-layer-atmos: 1;
-  --twl-layer-glass: 2;
-  --twl-layer-ui: 3;
+  --twl-layer-glass: 5;
+  --twl-layer-ui: 10;
   --twl-layer-nav: 200;
   --twl-layer-toast: 999;
   --twl-layer-overlay: 9999;

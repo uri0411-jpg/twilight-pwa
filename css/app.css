@@ -78,6 +78,28 @@ body {
   color: var(--cream);
 }
 
+/* ─── DEPTH LAYER SYSTEM ───────────────────────────────────────────────────────
+   4-layer hierarchy: Sky (0) → Atmos (1) → UI (10) → Nav (200) → Toast (999)
+   Utility classes backed by design tokens. Luminance stacking ensures foreground
+   elements are perceptually "closer" than background layers (visual depth).
+   filter: brightness() is NOT applied to sky layers — mix-blend-mode from
+   sky-canvas needs the raw photo luminance to composite correctly.
+───────────────────────────────────────────────────────────────────────────── */
+.layer-sky {
+  z-index: var(--twl-layer-sky);
+}
+.layer-atmos {
+  z-index: var(--twl-layer-atmos);
+  pointer-events: none;
+}
+.layer-glass {
+  z-index: var(--twl-layer-glass);
+  filter: brightness(var(--twl-luminance-glass));   /* 1.05 — visually "closer" */
+}
+.layer-ui {
+  z-index: var(--twl-layer-ui);
+}
+
 /* ─── BACKGROUND ─── */
 .bg-sunset {
   position: fixed;
@@ -85,7 +107,7 @@ body {
   background-image: url('../images/background.jpg');
   background-size: cover;
   background-position: center top;
-  z-index: 0;
+  z-index: var(--twl-layer-sky);
   transform: translateZ(0);
   will-change: transform;
 }
@@ -95,12 +117,20 @@ body {
    .bg-sunset photo directly — they MUST share its stacking context, so
    #sky-layers sits at document root as a sibling of .bg-sunset (not nested
    inside a screen container, which would create an isolation boundary).
-   Screens (z-index 10) still draw over this layer. */
+   Screens (z-index --twl-layer-ui = 10) still draw over this layer. */
 #sky-layers {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--twl-layer-atmos);
+}
+
+/* Atmospheric FX placeholder — reserved for future crepuscular rays / haze */
+.layer-atmos-fx {
+  position: fixed;
+  inset: 0;
+  z-index: var(--twl-layer-atmos);
+  pointer-events: none;
 }
 
 /* ─── SCREENS ─── */
@@ -110,7 +140,7 @@ body {
   display: none;
   overflow-y: auto;
   overflow-x: hidden;
-  z-index: 10;
+  z-index: var(--twl-layer-ui);
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -131,7 +161,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 200;
+  z-index: var(--twl-layer-nav);
   background: rgba(20,8,2,0.88);
   border: 1px solid rgba(212,165,116,0.28);
   border-radius: 40px;
@@ -175,20 +205,39 @@ body.has-install-banner .screen { padding-top: 56px; }
 }
 .nav-item.active .nav-label { color: var(--gold-light); }
 
-/* ─── GLASS CARDS ─── */
+/* ─── GLASS CARDS ─────────────────────────────────────────────────────────────
+   Standardized glass spec — every glass element uses the same recipe:
+   • border-top (bright): catches "light from above", creates raised-panel feel
+   • border-bottom (dim): grounds the element, adds depth
+   • inset highlight + shadow: inner luminance model (lit from top)
+   • backdrop-filter: frost the background
+   All values driven by --twl-color-glass-* tokens from semantic.json.
+───────────────────────────────────────────────────────────────────────────── */
 .glass {
-  background: var(--glass);
-  border: 1px solid var(--glass-border);
+  background: var(--twl-color-glass-bg);
+  border-top: 0.5px solid var(--twl-color-glass-border-top);
+  border-right: none;
+  border-bottom: 0.5px solid var(--twl-color-glass-border-bottom);
+  border-left: none;
   border-radius: var(--r-card);
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  box-shadow:
+    var(--twl-shadow-inset-highlight-top),
+    0 4px 20px rgba(0,0,0,0.20);
 }
 .glass-strong {
   background: rgba(22,11,4, calc(var(--glass-alpha) * 0.75));
-  border: 1px solid rgba(212,165,116,0.22);
+  border-top: 0.5px solid var(--twl-color-glass-border-top);
+  border-right: 1px solid rgba(212,165,116,0.14);
+  border-bottom: 0.5px solid var(--twl-color-glass-border-bottom);
+  border-left: 1px solid rgba(212,165,116,0.14);
   border-radius: var(--r-card);
-  box-shadow: 0 6px 28px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,200,100,0.07);
-  backdrop-filter: blur(20px) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-saturate));
+  box-shadow:
+    var(--twl-shadow-inset-highlight-top),
+    var(--twl-shadow-inset-highlight-bottom),
+    0 6px 28px rgba(0,0,0,0.28),
+    0 0 0 0.5px var(--twl-color-glass-inner-glow);
+  backdrop-filter: blur(var(--twl-blur-lg)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--twl-blur-lg)) saturate(var(--glass-saturate));
 }
 @supports not (backdrop-filter: blur(1px)) {
   .glass-strong {
@@ -300,7 +349,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   font-size: 13px;
   font-weight: 600;
   color: var(--cream);
-  z-index: 999;
+  z-index: var(--twl-layer-toast);
   display: none;
   white-space: nowrap;
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
@@ -314,7 +363,7 @@ body.has-install-banner .screen { padding-top: 56px; }
 .loading {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  z-index: var(--twl-layer-overlay);
   display: none;
   align-items: center;
   justify-content: center;
@@ -537,7 +586,7 @@ body.has-install-banner .screen { padding-top: 56px; }
 .debug-panel {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: var(--twl-layer-overlay);
   background: rgba(0, 0, 0, 0.72);
   display: flex;
   align-items: flex-end;
