@@ -93,7 +93,6 @@ const ISRAEL_CITIES = [
   { name: 'להבים', aliases: ['lehavim'], lat: 31.3750, lon: 34.8167 },
   { name: 'עומר', aliases: ['omer'], lat: 31.2639, lon: 34.8500 },
   { name: 'קריית מלאכי', aliases: ['kiryat malachi'], lat: 31.7286, lon: 34.7475 },
-  { name: 'שדה בועז', aliases: ['sde boaz', 'sdeh boaz'], lat: 31.2400, lon: 35.1500 },
   { name: 'שדה בוקר', aliases: ['sde boker'], lat: 30.8717, lon: 34.7917 },
   { name: 'טללים', aliases: ['tlalim'], lat: 30.9650, lon: 34.7570 },
   { name: 'רתמים', aliases: ['retamim'], lat: 31.0200, lon: 34.6200 },
