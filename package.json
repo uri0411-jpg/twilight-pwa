@@ -7,6 +7,8 @@
     "build:tokens": "node scripts/build_tokens.mjs",
     "bump-sw":      "node scripts/bump_sw.mjs",
     "predeploy":    "node scripts/bump_sw.mjs",
-    "clean-seed":   "node scripts/clean_learning_seed.mjs"
+    "clean-seed":   "node scripts/clean_learning_seed.mjs",
+    "lint:css":     "node scripts/lint_raw_css.mjs",
+    "test":         "node --test tests/*.mjs && node scripts/lint_raw_css.mjs"
   }
 }
