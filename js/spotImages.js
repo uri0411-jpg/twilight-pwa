@@ -18,9 +18,10 @@
 import { getCache, setCache } from './cache.js';
 
 const CACHE_TTL_HIT_MIN  = 60 * 24 * 7;   // 7 days for hits
-const CACHE_TTL_MISS_MIN = 60 * 6;        // 6 hours for misses (was 7d → user-felt latency on improvements)
+const CACHE_TTL_MISS_MIN = 30;            // 30 min for misses — short so pipeline improvements reach users fast
 const FETCH_TIMEOUT      = 4000;          // per-source timeout (ms)
-const GLOBAL_BUDGET_MS   = 6000;          // total budget for all parallel sources
+const FETCH_TIMEOUT_SLOW = 8000;          // for known-slow endpoints (Nominatim, Wikidata SPARQL)
+const GLOBAL_BUDGET_MS   = 7000;          // total budget for all parallel sources (raised to fit slow Wikidata)
 const THUMB_WIDTH        = 640;           // initial thumbnail width (px)
 
 const LANDSCAPE_KEYWORDS = [
@@ -32,11 +33,13 @@ const LANDSCAPE_KEYWORDS = [
 ];
 
 const NEGATIVE_KEYWORDS = [
-  'map', 'diagram', 'logo', 'sign', 'plaque', 'icon', 'flag',
-  'chart', 'svg', 'drawing', 'plan',
+  'map', 'diagram', 'logo', 'plaque', 'icon', 'flag',
+  'chart', 'drawing',
   'screenshot', 'webcam', 'texture', 'pattern', 'coat of arms', 'emblem',
   'stamp', 'coin', 'portrait',
 ];
+// Note: removed 'svg' (legitimate technical term in some descriptions),
+// 'plan' (e.g. "plan to hike", "open plan"), 'sign' (very common word).
 
 const WARM_COLORS = ['orange', 'pink', 'purple', 'golden', 'red'];
 
@@ -124,10 +127,14 @@ const EARLY_RETURN_SCORE = 12; // featured/quality with strong landscape signal
 async function raceForBest(spot, budgetMs) {
   // High-priority lane: trusted sources tied directly to this spot.
   // If one of these returns, it is almost certainly the right photo.
+  // Wikipedia-by-name covers spots without OSM wikipedia/wikidata tags,
+  // which is the common case for most Israeli viewpoints.
   const trusted = [
     tryWikidataP18(spot),
     tryCommonsCategory(spot),
     tryWikipediaSummary(spot),
+    tryHebrewWikipediaByName(spot),
+    tryEnglishWikipediaByName(spot),
   ];
 
   // Geographic lane: photos near these coordinates.
@@ -208,8 +215,8 @@ function scoreCandidate(page, { lenient = false } = {}) {
 
   const w = info.width || 0;
   const h = info.height || 0;
-  if (!lenient && (w < 200 || h < 150)) return -Infinity;
-  if (lenient && (w < 100 || h < 75)) return -Infinity;
+  if (!lenient && (w < 150 || h < 100)) return -Infinity;
+  if (lenient && (w < 80 || h < 60)) return -Infinity;
 
   const ext = info.extmetadata || {};
   const categories = (ext.Categories?.value || '').toLowerCase();
@@ -226,7 +233,7 @@ function scoreCandidate(page, { lenient = false } = {}) {
     if (text.includes(kw.toLowerCase())) score += 1;
   }
   for (const kw of NEGATIVE_KEYWORDS) {
-    if (text.includes(kw)) score -= 2;
+    if (text.includes(kw)) score -= 1;
   }
 
   if (categories.includes('featured picture')) score += 5;
@@ -361,21 +368,27 @@ async function tryCommonsLandscapeCategory(spot) {
 }
 
 // ─── Source: Commons geosearch with expanding radii ────────────
+// Tries 4 radii. The last two are increasingly lenient — better a real
+// photo from 30km away than a static map. We accept whatever Commons has.
 async function tryCommonsGeosearchMulti(spot) {
-  const radii = [500, 1500, 5000];
+  const radii = [500, 2000, 10000, 30000];
   for (const r of radii) {
-    const found = await commonsGeosearch(spot, r, { lenient: r === 5000 });
+    const lenient = r >= 10000;
+    const superLenient = r >= 30000; // accept any real photo, no scoring filter
+    const found = await commonsGeosearch(spot, r, { lenient, superLenient });
     if (found) {
       // Closer hits get higher implicit score
-      const distBoost = r === 500 ? 6 : (r === 1500 ? 3 : 0);
+      const distBoost = r === 500 ? 6 : (r === 2000 ? 3 : (r === 10000 ? 1 : 0));
       found.score = (found.score ?? 0) + distBoost;
+      // Mark wide-area hits so the UI can label them honestly
+      if (r >= 10000) found._isAreaPhoto = true;
       return found;
     }
   }
   return null;
 }
 
-async function commonsGeosearch(spot, radiusM, { lenient = false } = {}) {
+async function commonsGeosearch(spot, radiusM, { lenient = false, superLenient = false } = {}) {
   const u = new URL('https://commons.wikimedia.org/w/api.php');
   u.searchParams.set('action', 'query');
   u.searchParams.set('generator', 'geosearch');
@@ -395,18 +408,38 @@ async function commonsGeosearch(spot, radiusM, { lenient = false } = {}) {
   const pages = data?.query?.pages;
   if (!pages) return null;
 
-  const candidates = buildCandidates(pages, { lenient });
-  const best = candidates[0];
+  const candidates = buildCandidates(pages, { lenient: lenient || superLenient });
+  let best = candidates[0];
+  // Super-lenient: if scoring rejected everything, just take the first valid
+  // jpg/png file in the result set. Better any real photo than a static map.
+  if (!best && superLenient) {
+    const fallback = Object.values(pages)
+      .filter(p => /\.(jpe?g|png)$/i.test(p.title || ''))
+      .map(p => {
+        const info = p.imageinfo?.[0];
+        if (!info) return null;
+        return {
+          url: info.thumburl || info.url,
+          pageUrl: info.descriptionurl,
+          credit: info.extmetadata?.Artist?.value?.replace(/<[^>]*>/g, '').trim() || 'Wikimedia Commons',
+          score: -20,
+        };
+      })
+      .filter(Boolean);
+    best = fallback[0];
+  }
   if (!best) return null;
   return { url: best.url, credit: best.credit, pageUrl: best.pageUrl, sourceLabel: 'ויקישיתוף', score: best.score };
 }
 
-// ─── Source: Commons text search (English + sunset/landscape) ──
+// ─── Source: Commons text search (English) ─────────────────────
+// Excludes are filtered in scoring; keeping them out of srsearch widens
+// the result set considerably.
 async function tryCommonsTextSearch(spot) {
-  const name = spot._nameEn || spot.name;
-  if (!name) return null;
+  const enName = spot._nameEn || (spot.name && !/[\u0590-\u05FF]/.test(spot.name) ? spot.name : null);
+  if (!enName) return null;
   return commonsSearch(
-    `"${name}" sunset OR sunrise OR landscape OR view -map -diagram -logo -sign`
+    `"${enName}" sunset OR sunrise OR landscape OR view OR panorama`
   );
 }
 
@@ -415,7 +448,7 @@ async function tryCommonsTextSearchHebrew(spot) {
   const heName = spot.name && /[\u0590-\u05FF]/.test(spot.name) ? spot.name : null;
   if (!heName) return null;
   return commonsSearch(
-    `"${heName}" שקיעה OR זריחה OR נוף OR תצפית`
+    `"${heName}" שקיעה OR זריחה OR נוף OR תצפית OR פנורמה`
   );
 }
 
@@ -479,7 +512,7 @@ async function tryWikidataSPARQLAround(spot, radiusKm = 5) {
   };
 }
 
-// ─── Source: Wikipedia REST summary ────────────────────────────
+// ─── Source: Wikipedia REST summary (from OSM tag) ─────────────
 async function tryWikipediaSummary(spot) {
   if (!spot._wikipedia) return null;
   const idx = spot._wikipedia.indexOf(':');
@@ -501,46 +534,123 @@ async function tryWikipediaSummary(spot) {
   };
 }
 
+// ─── Source: Wikipedia summary by spot name (no OSM tag needed) ─
+// Tries the article whose title matches spot.name (or _nameEn). Many Israeli
+// viewpoints have Hebrew Wikipedia articles even without a wikipedia= tag.
+async function tryWikipediaByName(spot, lang) {
+  const isHebrew = lang === 'he';
+  let candidate = null;
+  if (isHebrew) {
+    candidate = spot.name && /[\u0590-\u05FF]/.test(spot.name) ? spot.name : null;
+  } else {
+    candidate = spot._nameEn || (spot.name && !/[\u0590-\u05FF]/.test(spot.name) ? spot.name : null);
+  }
+  if (!candidate) return null;
+
+  // Stage 1: try direct page summary
+  const direct = await fetchWikipediaSummary(lang, candidate);
+  if (direct) return direct;
+
+  // Stage 2: opensearch — tolerant of spelling/word-order differences
+  const u = new URL(`https://${lang}.wikipedia.org/w/api.php`);
+  u.searchParams.set('action', 'opensearch');
+  u.searchParams.set('search', candidate);
+  u.searchParams.set('limit', '1');
+  u.searchParams.set('namespace', '0');
+  u.searchParams.set('format', 'json');
+  u.searchParams.set('origin', '*');
+  try {
+    const res = await fetchT(u.toString());
+    if (!res.ok) return null;
+    const data = await res.json();
+    const matchTitle = data?.[1]?.[0];
+    if (!matchTitle || matchTitle === candidate) return null; // already tried
+    return await fetchWikipediaSummary(lang, matchTitle);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchWikipediaSummary(lang, title) {
+  try {
+    const u = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    const res = await fetchT(u);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const thumb = data?.thumbnail?.source || data?.originalimage?.source;
+    if (!thumb) return null;
+    // Prefer originalimage (full-res) over thumbnail when available — but we
+    // upscale thumb to a reasonable size by replacing the size suffix.
+    const upscaled = thumb.replace(/\/\d+px-/, `/${THUMB_WIDTH}px-`);
+    return {
+      url: upscaled,
+      credit: 'Wikipedia',
+      sourceLabel: 'ויקיפדיה',
+      pageUrl: data?.content_urls?.desktop?.page || null,
+      score: 16, // slightly lower than Wikidata-tagged P18 (20) but very high
+    };
+  } catch {
+    return null;
+  }
+}
+
+const tryHebrewWikipediaByName  = (spot) => tryWikipediaByName(spot, 'he');
+const tryEnglishWikipediaByName = (spot) => tryWikipediaByName(spot, 'en');
+
 // ─── Source: Regional category via Nominatim reverse-geocode ───
+// Commons category convention: "Sunsets in {city}" exists for major Israeli
+// cities (Tel Aviv, Jerusalem, Haifa, Eilat, etc.) but NOT for districts
+// (HaMerkaz, HaDarom). Fall back to Israel-wide category, which has 3000+
+// real photos — better than a static map.
 const REGION_CACHE_TTL_MIN = 60 * 24 * 30; // 30 days
 
 async function tryRegionalCategorySearch(spot) {
-  const region = await getRegionForSpot(spot);
-  if (!region) return null;
-  // Try sunset-of-region first, then landscape
-  const queries = [
-    `incategory:"Sunsets of ${region}"`,
-    `incategory:"Sunsets in ${region}"`,
-    `incategory:"Landscapes of ${region}"`,
-  ];
+  const place = await getPlaceForSpot(spot);
+  // Build query list. Even without a city we still try Israel-wide.
+  const queries = [];
+  if (place) {
+    queries.push(`incategory:"Sunsets in ${place}"`);
+    queries.push(`incategory:"Sunsets of ${place}"`);
+    queries.push(`incategory:"Landscapes of ${place}"`);
+    queries.push(`incategory:"Views of ${place}"`);
+  }
+  // Israel-wide baselines — last so they don't outrank city-specific hits.
+  queries.push(`incategory:"Sunsets in Israel"`);
+  queries.push(`incategory:"Landscapes of Israel"`);
+
   for (const q of queries) {
     const r = await commonsSearch(q);
     if (r) {
-      r.score += 4;
+      // City-specific gets a stronger boost than Israel-wide
+      const boost = q.includes(`"${place}"`) ? 5 : 2;
+      r.score = (r.score ?? 0) + boost;
+      if (!place || !q.includes(`"${place}"`)) r._isAreaPhoto = true;
       return r;
     }
   }
   return null;
 }
 
-async function getRegionForSpot(spot) {
-  const cacheKey = `region_${spot.lat.toFixed(2)}_${spot.lon.toFixed(2)}`;
+async function getPlaceForSpot(spot) {
+  const cacheKey = `place_${spot.lat.toFixed(2)}_${spot.lon.toFixed(2)}`;
   const cached = getCache(cacheKey);
-  if (cached) return cached.region;
+  if (cached) return cached.place;
 
   try {
-    const u = `https://nominatim.openstreetmap.org/reverse?lat=${spot.lat}&lon=${spot.lon}&format=json&zoom=8&accept-language=en`;
-    const res = await fetchT(u);
+    // zoom=10 gives city/town resolution; lower zoom returns districts.
+    const u = `https://nominatim.openstreetmap.org/reverse?lat=${spot.lat}&lon=${spot.lon}&format=json&zoom=10&accept-language=en`;
+    const res = await fetchT(u, FETCH_TIMEOUT_SLOW);
     if (!res.ok) {
-      setCache(cacheKey, { region: null }, REGION_CACHE_TTL_MIN);
+      setCache(cacheKey, { place: null }, REGION_CACHE_TTL_MIN);
       return null;
     }
     const data = await res.json();
-    // Prefer state/region/county for category matching
     const a = data?.address || {};
-    const region = a.state || a.region || a.county || a.city || null;
-    setCache(cacheKey, { region }, REGION_CACHE_TTL_MIN);
-    return region;
+    // Prefer city > town > village > municipality. Skip district-level
+    // (state/region/county) since Commons has no categories for them.
+    const place = a.city || a.town || a.village || a.municipality || null;
+    setCache(cacheKey, { place }, REGION_CACHE_TTL_MIN);
+    return place;
   } catch {
     return null;
   }

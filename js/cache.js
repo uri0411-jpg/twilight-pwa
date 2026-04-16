@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════
 
 const PREFIX = 'twl_';
-const CACHE_VERSION = 1; // Contract 5: bump to invalidate all cached entries
+const CACHE_VERSION = 2; // Bumped to invalidate stale spotImages misses from v4 strict pipeline
 
 /**
  * Store data with TTL.
