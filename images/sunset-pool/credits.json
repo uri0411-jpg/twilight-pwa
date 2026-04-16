@@ -1,16 +1,16 @@
 {
-  "_doc": "Per-image credits for the sunset-pool. Each entry maps filename → { author, source, license }. Update when adding/replacing images. The UI shows author + license under the photo when a generic sunset is displayed.",
+  "_doc": "Per-image credits for the sunset-pool. Each entry maps filename → { author, source, license }. The UI shows author + license under the photo when a generic sunset is displayed.",
 
-  "beach-1.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "beach-2.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "peak-1.jpg":    { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "peak-2.jpg":    { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "desert-1.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "desert-2.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "forest-1.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "forest-2.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "urban-1.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "urban-2.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "generic-1.jpg": { "author": "TODO", "source": "TODO", "license": "TODO" },
-  "generic-2.jpg": { "author": "TODO", "source": "TODO", "license": "TODO" }
+  "beach-1.jpg":   { "author": "Guy Bagdi", "source": "https://commons.wikimedia.org/wiki/File:PikiWiki_Israel_35799_Palmahim_beach_sunset.JPG", "license": "Public Domain" },
+  "beach-2.jpg":   { "author": "Pavel Bernshtam", "source": "https://commons.wikimedia.org/wiki/File:Palmachim_beach,_Israel.jpg", "license": "CC BY-SA 4.0" },
+  "peak-1.jpg":    { "author": "Lior Akunis", "source": "https://commons.wikimedia.org/wiki/File:Nimrod_Fortress_Sunset.jpg", "license": "CC BY-SA 4.0" },
+  "peak-2.jpg":    { "author": "Tibi Engelman", "source": "https://commons.wikimedia.org/wiki/File:PikiWiki_Israel_37338_sunset_lake.jpg", "license": "CC BY 2.5" },
+  "desert-1.jpg":  { "author": "Urielevy", "source": "https://commons.wikimedia.org/wiki/File:Mishmar_Hanegev_landscape.JPG", "license": "CC BY-SA 4.0" },
+  "desert-2.jpg":  { "author": "Zeev Barkan", "source": "https://commons.wikimedia.org/wiki/File:Neot_Semadar_sunset-a-1_(5187714656).jpg", "license": "CC BY 2.0" },
+  "forest-1.jpg":  { "author": "Shlomo Roded", "source": "https://commons.wikimedia.org/wiki/File:141690_sunset_on_mount_meron_PikiWiki_Israel.jpg", "license": "CC BY 2.5" },
+  "forest-2.jpg":  { "author": "Shlomo Roded", "source": "https://commons.wikimedia.org/wiki/File:141689_sunset_on_mount_meron_PikiWiki_Israel.jpg", "license": "CC BY 2.5" },
+  "urban-1.jpg":   { "author": "Benjamin Lipsman", "source": "https://commons.wikimedia.org/wiki/File:2013_Sunset_over_Haifa.jpg", "license": "CC BY 2.0" },
+  "urban-2.jpg":   { "author": "Davidi Vardi", "source": "https://commons.wikimedia.org/wiki/File:111063_sunset_in_rishon_lezion_PikiWiki_Israel.jpg", "license": "CC BY 2.5" },
+  "generic-1.jpg": { "author": "Israel Sundseth", "source": "https://commons.wikimedia.org/wiki/File:Israel_Sundseth_2014-10-14_(Unsplash_djWfjBv3jTc).jpg", "license": "CC0" },
+  "generic-2.jpg": { "author": "Israel Sundseth", "source": "https://commons.wikimedia.org/wiki/File:Israel_Sundseth_2015-01-26_(Unsplash).jpg", "license": "CC0" }
 }
