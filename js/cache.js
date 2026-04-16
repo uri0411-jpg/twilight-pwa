@@ -87,6 +87,13 @@ export function getStaleCache(key) {
 }
 
 /**
+ * Remove a single cache entry by key.
+ */
+export function delCache(key) {
+  try { localStorage.removeItem(PREFIX + key); } catch {}
+}
+
+/**
  * Remove all expired entries from localStorage
  */
 export function clearExpired() {

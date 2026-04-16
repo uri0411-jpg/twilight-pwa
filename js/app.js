@@ -627,9 +627,6 @@ async function handleSetLocation(e) {
     const gen = bumpLocGen();
     setState({ loc: { lat, lon }, city: city || 'מיקום מותאם', locationResolved: true });
 
-    // Rewire SWR subscription to the new zone
-    _rewireZoneSubscription(lat, lon, gen);
-
     // Clear EMA pin for the new location so scores aren't smoothed against
     // a previous session's data at a different spot.
     const pinZone = getZoneForCoord(lat, lon);
@@ -652,6 +649,10 @@ async function handleSetLocation(e) {
     setState({ weekData });
     const st = getState();
     await initMainScreen(st.loc, st.city, weekData, calcNearbyAvgScore(null, weekData));
+    // Wire SWR zone subscription only after the initial render completes — prevents
+    // a background revalidation callback from firing refreshMainScores against a
+    // half-built DOM (silent bail in main-screen.js:653).
+    _rewireZoneSubscription(lat, lon, gen);
     saveLocation(lat, lon, st.city); // persist only after successful render
     showLoading(false);
 
@@ -696,15 +697,26 @@ async function handleSetLocation(e) {
     }
   } catch (err) {
     logError({ scope: 'location', action: 'setLocation', error: err });
-    // Restore previous state so the app isn't stuck pointing at a failed location
-    setState({ loc: prevLoc, city: prevCity });
     if (typeof window !== 'undefined' && window.__twl_debug) window.__twl_debug.locChangeFails++;
-    const msg = err?.message === 'EMPTY_WEATHER_DATA'
-      ? 'אין נתונים זמינים כרגע'
-      : err?.name === 'TypeError' || err?.message?.includes('fetch')
-        ? 'שגיאת רשת — נסה שוב'
-        : 'עדכון מיקום נכשל';
-    showToast(msg, 'error');
+    // Invalidate closures tied to this gen (ensemble refinement, any subscription
+    // callback) so a late-arriving revalidation for the failed zone can't stomp UI.
+    const newGen = bumpLocGen();
+    // Restore previous state and re-point the zone subscription back at prevLoc.
+    setState({ loc: prevLoc, city: prevCity });
+    if (prevLoc && prevLoc.lat != null && prevLoc.lon != null) {
+      _rewireZoneSubscription(prevLoc.lat, prevLoc.lon, newGen);
+    }
+    // If the user already queued a successor change, let the drain loop surface
+    // its own feedback instead of a stale toast.
+    if (_pendingLocation === e.detail) _pendingLocation = null;
+    if (_pendingLocation === null) {
+      const msg = err?.message === 'EMPTY_WEATHER_DATA'
+        ? 'אין נתונים זמינים כרגע'
+        : err?.name === 'TypeError' || err?.message?.includes('fetch')
+          ? 'שגיאת רשת — נסה שוב'
+          : 'עדכון מיקום נכשל';
+      showToast(msg, 'error');
+    }
   } finally {
     showLoading(false);
     setState({ isRefreshing: false });

@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 import { OPEN_METEO_URL, OPEN_METEO_AQ_URL, NOMINATIM_URL, OVERPASS_URL, OVERPASS_FALLBACK_URL, CACHE_TTL, getWeatherTTL } from './config.js';
-import { setCache, getCache, getStaleCache, swr, fetchWithDedup } from './cache.js';
+import { setCache, getCache, getStaleCache, swr, fetchWithDedup, delCache } from './cache.js';
 import { distKm } from './utils.js';
 import { getZoneForCoord } from './zones.js';
 
@@ -171,6 +171,20 @@ export async function fetchWeekFast(lat, lon, force = false) {
   }, ttl);
 
   if (result.data) {
+    // Defensive: reject structurally-malformed cache entries (missing daily/hourly
+    // time arrays — e.g. from a partial response that slipped through setCache or
+    // an old schema). Prevents EMPTY_WEATHER_DATA throws in handleSetLocation.
+    const d = result.data;
+    if (!d?.daily?.time?.length || !d?.hourly?.time?.length) {
+      console.warn(`[api] fetchWeekFast: malformed cache for zone ${zone.zoneId} — purging + refetching`);
+      delCache(key);
+      return await fetchWithDedup(key, async () => {
+        const fresh = await fetchModel(zone.repLat, zone.repLon);
+        fresh._modelCount = 1;
+        setCache(key, fresh, ttl);
+        return fresh;
+      });
+    }
     // Cache hit (fresh or stale) — always return as Promise.
     // If stale, background revalidation is in-flight and will notify subscribers.
     if (result.isStale) {
