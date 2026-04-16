@@ -76,7 +76,7 @@ const DAILY_PARAMS = [
 // ─────────────────────────────────────────
 //  Fetch single model forecast
 // ─────────────────────────────────────────
-async function fetchModel(lat, lon, model = null) {
+async function fetchModel(lat, lon, model = null, fetchOpts = undefined) {
   const params = new URLSearchParams({
     latitude: lat, longitude: lon,
     timezone: 'Asia/Jerusalem', forecast_days: 7,
@@ -85,10 +85,19 @@ async function fetchModel(lat, lon, model = null) {
   if (model) params.set('models', model);
 
   const url = `${OPEN_METEO_URL}?${params}`;
-  const res = await fetchWithRetry(url);
+  const res = await fetchWithRetry(url, {}, fetchOpts);
   if (!res.ok) throw new Error(`Open-Meteo ${model || 'best_match'} error ${res.status}`);
-  try { return await res.json(); }
+  let data;
+  try { data = await res.json(); }
   catch (e) { throw new Error(`[api] JSON parse failed for ${model || 'best_match'}: ${e.message}`); }
+
+  // Schema sanity — partial/empty responses have been observed during upstream
+  // maintenance windows and silently cache as "blank forecast". Reject here so
+  // the SWR layer never promotes a malformed payload to the UI.
+  if (!data?.hourly?.time?.length || !data?.daily?.time?.length) {
+    throw new Error(`[api] incomplete response for ${model || 'best_match'}: missing hourly/daily time array`);
+  }
+  return data;
 }
 
 // ─────────────────────────────────────────
@@ -206,9 +215,13 @@ export async function fetchWeekEnsemble(lat, lon, primaryData, wasFreshFetch = t
   const key  = `ensemble_zone_${zone.zoneId}`;
 
   return fetchWithDedup(key, async () => {
+    // Secondary models are nice-to-have refinement. Bound each to 8s / 2 attempts
+    // so a stalled upstream can't block the ensemble (and thus delay any UI that
+    // awaits it) behind the full 12s × 3 retry budget.
+    const ensembleOpts = { maxAttempts: 2, timeoutMs: FETCH_TIMEOUT_SECONDARY_MS };
     const [ecmwfResult, gfsResult] = await Promise.allSettled([
-      fetchModel(zone.repLat, zone.repLon, 'ecmwf_ifs025'),
-      fetchModel(zone.repLat, zone.repLon, 'gfs_seamless')
+      fetchModel(zone.repLat, zone.repLon, 'ecmwf_ifs025', ensembleOpts),
+      fetchModel(zone.repLat, zone.repLon, 'gfs_seamless', ensembleOpts)
     ]);
 
     const ecmwfData = ecmwfResult.status === 'fulfilled' ? ecmwfResult.value : primaryData;
@@ -289,8 +302,13 @@ async function _fetchAirQualityRaw(lat, lon) {
   try {
     const res = await fetchWithRetry(`${OPEN_METEO_AQ_URL}?${params}`, {}, { maxAttempts: 2, timeoutMs: FETCH_TIMEOUT_SECONDARY_MS });
     if (!res.ok) throw new Error(`AQ API error ${res.status}`);
-    try { return await res.json(); }
+    let data;
+    try { data = await res.json(); }
     catch (e) { throw new Error(`[api] AQ JSON parse failed: ${e.message}`); }
+    if (!data?.hourly?.time?.length) {
+      throw new Error('[api] incomplete AQ response: missing hourly.time');
+    }
+    return data;
   } catch (e) {
     console.warn('[api] Air quality fetch failed:', e.message);
     return null;

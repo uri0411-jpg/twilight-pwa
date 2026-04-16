@@ -117,8 +117,9 @@ const _EXPOSURE = USE_ACES_TONEMAP ? ACES_EXPOSURE : EXPOSURE;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Clamp v to integer in [0, 255]. */
+/** Clamp v to integer in [0, 255]. NaN → 0 so bad physics inputs degrade to black, not glitchy colours. */
 function clamp8(v) {
+  if (!Number.isFinite(v)) return 0;
   return Math.round(Math.max(0, Math.min(255, v)));
 }
 

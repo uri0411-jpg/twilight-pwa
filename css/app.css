@@ -215,10 +215,9 @@ body.has-install-banner .screen { padding-top: 56px; }
 ───────────────────────────────────────────────────────────────────────────── */
 .glass {
   background: var(--twl-color-glass-bg);
-  border-top: 0.5px solid var(--twl-color-glass-border-top);
-  border-right: none;
-  border-bottom: 0.5px solid var(--twl-color-glass-border-bottom);
-  border-left: none;
+  border-block-start: 0.5px solid var(--twl-color-glass-border-top);
+  border-inline: none;
+  border-block-end: 0.5px solid var(--twl-color-glass-border-bottom);
   border-radius: var(--r-card);
   box-shadow:
     var(--twl-shadow-inset-highlight-top),
@@ -226,10 +225,9 @@ body.has-install-banner .screen { padding-top: 56px; }
 }
 .glass-strong {
   background: rgba(22,11,4, calc(var(--glass-alpha) * 0.75));
-  border-top: 0.5px solid var(--twl-color-glass-border-top);
-  border-right: 1px solid rgba(212,165,116,0.14);
-  border-bottom: 0.5px solid var(--twl-color-glass-border-bottom);
-  border-left: 1px solid rgba(212,165,116,0.14);
+  border-block-start: 0.5px solid var(--twl-color-glass-border-top);
+  border-inline: 1px solid rgba(212,165,116,0.14);
+  border-block-end: 0.5px solid var(--twl-color-glass-border-bottom);
   border-radius: var(--r-card);
   box-shadow:
     var(--twl-shadow-inset-highlight-top),
@@ -457,12 +455,21 @@ body.has-install-banner .screen { padding-top: 56px; }
   0%, 100% { transform: translateY(0); }
   50%       { transform: translateY(4px); }
 }
+/* RTL-correct slide-ins.
+   In an RTL document the timeline of the "next" screen sits to the LEFT of
+   the current one, so a "forward" nav should slide the new screen in FROM
+   the left (negative X in the viewport). The previous keyframes had these
+   directions inverted for RTL. We flip the sign by driving both keyframes
+   through --screen-slide-dir, which is +1 for LTR and -1 for RTL. */
+:root { --screen-slide-dir: 1; }
+html[dir="rtl"] { --screen-slide-dir: -1; }
+
 @keyframes screenSlideIn {
-  from { opacity: 0; transform: translateX(-24px); }
+  from { opacity: 0; transform: translateX(calc(var(--screen-slide-dir) * 24px)); }
   to   { opacity: 1; transform: translateX(0); }
 }
 @keyframes screenSlideInReverse {
-  from { opacity: 0; transform: translateX(24px); }
+  from { opacity: 0; transform: translateX(calc(var(--screen-slide-dir) * -24px)); }
   to   { opacity: 1; transform: translateX(0); }
 }
 @keyframes screenFadeIn {
@@ -647,7 +654,7 @@ body.has-install-banner .screen { padding-top: 56px; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 2px;
+  padding-top: max(2px, env(safe-area-inset-top));
 }
 .home-topbar-left { display: flex; gap: 8px; align-items: center; }
 .icon-btn {
@@ -1269,7 +1276,7 @@ body.has-install-banner .screen { padding-top: 56px; }
 .cloud-chart-marker {
   position: absolute;
   top: -6px;
-  transform: translateX(50%);
+  transform: translateX(-50%);
   font-size: 12px;
   line-height: 1;
   filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));
@@ -1728,7 +1735,7 @@ body.has-install-banner .screen { padding-top: 56px; }
 .spot-map-expand-btn {
   position: absolute;
   top: 10px;
-  left: 10px;
+  inset-inline-start: 10px;
   z-index: 1001;
   background: rgba(20,8,2,0.88);
   border: 1px solid rgba(212,165,116,0.3);
@@ -1821,8 +1828,10 @@ body.has-install-banner .screen { padding-top: 56px; }
   box-shadow: 0 2px 6px rgba(0,0,0,0.3);
   transition: all 0.3s;
 }
-.toggle.on  .toggle-knob { right: 3px; }
-.toggle.off .toggle-knob { left: 3px; }
+/* Logical positioning: in LTR on=right, in RTL on=left — matches iOS/Android
+   convention where "on" sits at the end of the reading direction. */
+.toggle.on  .toggle-knob { inset-inline-end: 3px; }
+.toggle.off .toggle-knob { inset-inline-start: 3px; }
 
 /* Wizard */
 .wizard-wrap { padding: 16px; }

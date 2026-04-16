@@ -1533,7 +1533,7 @@ function _loadSpotPhoto(i) {
     container.innerHTML = `
       ${isFallback ? '<div class="spot-photo-link spot-photo-fallback">' :
         `<a href="${page}" target="_blank" rel="noopener" class="spot-photo-link">`}
-        <img src="${result.url}" alt="${esc(spot.name)}" loading="lazy" decoding="async"
+        <img src="${result.url}" alt="${esc(spot.name)}" loading="lazy" decoding="async" width="640" height="360"
           onerror="this.onerror=null;this.parentNode.parentNode.classList.add('spot-photo-empty');this.parentNode.remove();">
         <div class="spot-photo-credit">${isFallback ? '' : `צילום: ${label}${credit ? ' — ' + credit : ''}`}</div>
       ${isFallback ? '</div>' : '</a>'}`;

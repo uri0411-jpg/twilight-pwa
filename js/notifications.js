@@ -5,6 +5,12 @@
 
 const STORAGE_KEY = 'twl_alerts';
 
+// In-memory map of active setTimeout handles.
+// NOTE: timerId values are only meaningful inside the current document lifetime,
+// so they MUST NOT be persisted to localStorage. After a reload `rearmSavedAlerts`
+// re-creates the timers and refills this map.
+const _timers = new Map();
+
 // ─────────────────────────────────────────
 //  Permission
 // ─────────────────────────────────────────
@@ -25,7 +31,13 @@ export function getSavedAlerts() {
 }
 
 function _saveAlerts(obj) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+  // Defensive: strip timerId before serializing in case a caller mutated an entry.
+  const clean = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const { timerId, ...rest } = v || {};
+    clean[k] = rest;
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
 }
 
 // ─────────────────────────────────────────
@@ -39,9 +51,10 @@ function _saveAlerts(obj) {
 export function scheduleAlert(key, triggerAt, body, score, date) {
   const alerts = getSavedAlerts();
 
-  // Cancel any previous timer for this key
-  if (alerts[key]?.timerId) {
-    clearTimeout(alerts[key].timerId);
+  // Cancel any previous timer for this key (in-memory, not from storage)
+  if (_timers.has(key)) {
+    clearTimeout(_timers.get(key));
+    _timers.delete(key);
   }
 
   const delay = triggerAt.getTime() - Date.now();
@@ -49,13 +62,15 @@ export function scheduleAlert(key, triggerAt, body, score, date) {
 
   const timerId = setTimeout(() => {
     _fireNotification(body, score);
+    _timers.delete(key);
     // Remove from storage after firing
     const current = getSavedAlerts();
     delete current[key];
     _saveAlerts(current);
   }, delay);
+  _timers.set(key, timerId);
 
-  alerts[key] = { key, date, body, score, triggerAt: triggerAt.toISOString(), timerId };
+  alerts[key] = { key, date, body, score, triggerAt: triggerAt.toISOString() };
   _saveAlerts(alerts);
 }
 
@@ -64,7 +79,10 @@ export function scheduleAlert(key, triggerAt, body, score, date) {
 // ─────────────────────────────────────────
 export function cancelAlert(key) {
   const alerts = getSavedAlerts();
-  if (alerts[key]?.timerId) clearTimeout(alerts[key].timerId);
+  if (_timers.has(key)) {
+    clearTimeout(_timers.get(key));
+    _timers.delete(key);
+  }
   delete alerts[key];
   _saveAlerts(alerts);
 }
@@ -107,18 +125,25 @@ export function rearmSavedAlerts() {
   const now = Date.now();
   const pruned = {};
 
+  // Clear any leftover in-memory timers (defensive — rearm may be called more than once)
+  for (const id of _timers.values()) clearTimeout(id);
+  _timers.clear();
+
   for (const [key, entry] of Object.entries(alerts)) {
     const triggerMs = new Date(entry.triggerAt).getTime();
-    if (triggerMs <= now) continue; // already past, skip
+    if (!Number.isFinite(triggerMs) || triggerMs <= now) continue; // already past, skip
 
     const timerId = setTimeout(() => {
       _fireNotification(entry.body, entry.score);
+      _timers.delete(key);
       const current = getSavedAlerts();
       delete current[key];
       _saveAlerts(current);
     }, triggerMs - now);
+    _timers.set(key, timerId);
 
-    pruned[key] = { ...entry, timerId };
+    pruned[key] = { ...entry };
+    delete pruned[key].timerId; // legacy cleanup for stored entries from older builds
   }
 
   _saveAlerts(pruned);

@@ -35,6 +35,14 @@ export function initNav() {
       const id = item.dataset.screen;
       showScreen(id);
     });
+    // Keyboard accessibility: nav items have role="button" + tabindex="0",
+    // so Enter/Space must activate them like native buttons.
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        showScreen(item.dataset.screen);
+      }
+    });
   });
 }
 

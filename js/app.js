@@ -111,6 +111,16 @@ window.__twl_debug = window.__twl_debug || {
 //  Boot
 // ─────────────────────────────────────────
 async function boot() {
+  // Re-entry guard: HMR, double-import, or accidental second <script> tag would
+  // otherwise stack duplicate event listeners (twilight:refresh, visibilitychange, …)
+  // and fire each flow twice.
+  if (typeof window !== 'undefined') {
+    if (window.__twlBooted) {
+      console.warn('[boot] boot() called twice — ignoring second invocation');
+      return;
+    }
+    window.__twlBooted = true;
+  }
   const bootId = initBootId();
   const _bootTime = Date.now();
   setBootState(BOOT_STATES.LOADING);
@@ -277,9 +287,16 @@ const ZONE_MIN_DIST_KM = 2;             // 2 km Haversine
 function _rewireZoneSubscription(lat, lon, gen) {
   if (_unsubWeather) _unsubWeather();
   const zone = getZoneForCoord(lat, lon);
-  _currentZoneId = zone.zoneId;
-  _unsubWeather = subscribeCache(`weather_zone_${zone.zoneId}`, (freshWeather) => {
+  const subscribedZoneId = zone.zoneId;
+  _currentZoneId = subscribedZoneId;
+  _unsubWeather = subscribeCache(`weather_zone_${subscribedZoneId}`, (freshWeather) => {
     if (isStale(gen)) return;
+    // Zone guard: if the user has since moved into a different zone, an
+    // in-flight revalidation from the old zone must NOT overwrite UI state.
+    if (_currentZoneId !== subscribedZoneId) {
+      console.log(`[swr] dropping late revalidation from zone ${subscribedZoneId} — current is ${_currentZoneId}`);
+      return;
+    }
     const locSnap = deepFreeze({ lat, lon });
     const weekData = _applyScoreEMA(
       calcWeekData(freshWeather, getState().airQuality, locSnap.lat, locSnap.lon, null),
@@ -707,7 +724,12 @@ function handleVisibilityChange() {
         _lastZoneRefreshLat = loc.lat;
         _lastZoneRefreshLon = loc.lon;
       }
-      handleRefresh();
+      handleRefresh().catch(err => {
+        logError({ scope: 'visibility', action: 'handleRefresh', error: err });
+        window.dispatchEvent(new CustomEvent('twilight:toast', {
+          detail: { msg: 'עדכון נכשל — ייתכנו נתונים ישנים', type: 'error' }
+        }));
+      });
     } else {
       syncLocationFromState();
     }

@@ -6,9 +6,10 @@
     "start":        "node server.js",
     "build:tokens": "node scripts/build_tokens.mjs",
     "bump-sw":      "node scripts/bump_sw.mjs",
+    "check-sw":     "node scripts/bump_sw.mjs --check",
     "predeploy":    "node scripts/bump_sw.mjs",
     "clean-seed":   "node scripts/clean_learning_seed.mjs",
     "lint:css":     "node scripts/lint_raw_css.mjs",
-    "test":         "node --test tests/*.mjs && node scripts/lint_raw_css.mjs"
+    "test":         "node --test tests/*.mjs && node scripts/lint_raw_css.mjs && node scripts/bump_sw.mjs --check"
   }
 }

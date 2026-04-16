@@ -709,6 +709,12 @@ export function computeAtmosphere(
   };
   // Growth factor must be ≥ 1 (dry baseline); guard against bad inputs.
   const g = Math.max(1, mieGrowth ?? 1);
+  // Ozone column: callers sometimes pass LOCATION_CLIMATE.ozoneDU which may be
+  // undefined/null for locations absent from the climate table. Non-finite values
+  // produce NaN in chappuisAbsorption → greyscale sky. Fall back to the
+  // mid-latitude annual mean of 300 DU.
+  if (!Number.isFinite(ozoneDU)) ozoneDU = 300;
+  if (!Number.isFinite(angstromExp)) angstromExp = 0;
 
   // ── Cache lookup ──────────────────────────────────────────────────────────
   // Cloud fractions are rounded to 2 decimals — the physical effect of a 1%

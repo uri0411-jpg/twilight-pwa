@@ -269,6 +269,7 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
     _offscreen.height = ph;
   }
   const off = _offscreen.getContext('2d');
+  if (!off) { _offscreen = null; return; } // context lost — bail, re-create next tick
   off.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in logical coords
   off.clearRect(0, 0, w, h);
 
@@ -334,6 +335,7 @@ export function renderSkyCanvas(container, sunAngle_rad, turbidity, angstromExp 
 
   // ── COMMIT: atomic blit to visible canvas ─────────────────────────────────
   const ctx = canvas.getContext('2d');
+  if (!ctx) return; // context lost (rare: long-backgrounded tab, low memory)
   ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to physical coords for blit
   ctx.clearRect(0, 0, pw, ph);
   ctx.drawImage(_offscreen, 0, 0, pw, ph);

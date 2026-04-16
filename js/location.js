@@ -13,7 +13,13 @@ const MAX_AGE_MS   = 24 * 60 * 60 * 1000; // 24 hours
 export async function checkLocationPermission() {
   try {
     if (!navigator.permissions) return 'unknown';
-    const status = await navigator.permissions.query({ name: 'geolocation' });
+    // Some older/embedded browsers have a permissions.query that hangs instead
+    // of rejecting on unsupported descriptors. Cap at 2s so boot can't stall
+    // behind an unresponsive permission subsystem.
+    const status = await Promise.race([
+      navigator.permissions.query({ name: 'geolocation' }),
+      new Promise(resolve => setTimeout(() => resolve({ state: 'unknown' }), 2000)),
+    ]);
     return status.state;
   } catch { return 'unknown'; }
 }

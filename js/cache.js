@@ -7,8 +7,10 @@ const PREFIX = 'twl_';
 const CACHE_VERSION = 1; // Contract 5: bump to invalidate all cached entries
 
 /**
- * Store data with TTL
- * FIX: handles QuotaExceededError by clearing all cache and retrying
+ * Store data with TTL.
+ * Handles QuotaExceededError by clearing all cache and retrying once.
+ * @returns {boolean} true on success, false if the entry was not persisted
+ *                    (callers can use this to surface "offline / unable to cache" state).
  */
 export function setCache(key, data, ttlMin) {
   const entry = {
@@ -21,17 +23,21 @@ export function setCache(key, data, ttlMin) {
 
   try {
     localStorage.setItem(PREFIX + key, value);
+    return true;
   } catch (e) {
     if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
       console.warn('[cache] Storage full — clearing all cache and retrying');
       try {
         clearAll();
         localStorage.setItem(PREFIX + key, value);
+        return true;
       } catch (e2) {
         console.warn('[cache] setCache failed even after clearAll:', e2);
+        return false;
       }
     } else {
       console.warn('[cache] setCache failed:', e);
+      return false;
     }
   }
 }
@@ -187,7 +193,15 @@ export function subscribe(key, cb) {
 
 function notify(key, data) {
   const cbs = _listeners.get(key);
-  if (cbs) cbs.forEach(cb => { try { cb(data); } catch (e) { console.warn('[cache] subscriber error:', e); } });
+  if (!cbs || cbs.size === 0) return;
+  // Deep-clone the payload so that subscribers mutating the object (e.g. the
+  // main-screen pipeline annotates dayData with skyColors/_isStale) cannot
+  // pollute the value that a later JSON.stringify will serialise back into
+  // localStorage via setCache.
+  let snapshot;
+  try { snapshot = JSON.parse(JSON.stringify(data)); }
+  catch { snapshot = data; } // circular or non-JSON — fall back to live reference
+  cbs.forEach(cb => { try { cb(snapshot); } catch (e) { console.warn('[cache] subscriber error:', e); } });
 }
 
 // ─────────────────────────────────────────

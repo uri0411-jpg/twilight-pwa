@@ -326,15 +326,19 @@ function startLiveGradient(today, loc, locGen) {
 
     // Golden window start — escalating haptic
     if (today.goldenWindow?.windowStart) {
+      // windowStart is produced as a Date by goldenWindow.js, but a round-trip
+      // through JSON (cache deep-clone, localStorage rehydration, ensemble
+      // averaging) turns it into an ISO string. Normalise both paths.
       const _ws = today.goldenWindow.windowStart;
-      const _wsStr = _ws instanceof Date
-        ? `${String(_ws.getHours()).padStart(2,'0')}:${String(_ws.getMinutes()).padStart(2,'0')}`
-        : String(_ws);
-      const [gwH, gwM] = _wsStr.split(':').map(Number);
-      const gwMs = new Date(today.date + 'T12:00:00').setHours(gwH, gwM, 0, 0);
-      const secsToGW = (gwMs - Date.now()) / 1000;
-      if (secsToGW >= 0 && secsToGW < 35) { // within the 30s update window
-        navigator.vibrate?.([30, 50, 60, 50, 90]); // escalating = "now"
+      const gw  = _ws instanceof Date ? _ws
+                : typeof _ws === 'string' ? new Date(_ws)
+                : null;
+      if (gw && !isNaN(gw.getTime())) {
+        const gwMs = gw.getTime();
+        const secsToGW = (gwMs - Date.now()) / 1000;
+        if (secsToGW >= 0 && secsToGW < 35) { // within the 30s update window
+          navigator.vibrate?.([30, 50, 60, 50, 90]); // escalating = "now"
+        }
       }
     }
 
@@ -702,6 +706,13 @@ function startCountdown(today) {
   const el = document.getElementById('countdown-timer');
   if (!el) return;
 
+  // Track the last phase rendered so the post-sunset "rating" / "thanks" state
+  // is written into the DOM exactly once — previously the 1s tick re-called
+  // innerHTML every second, detaching + re-attaching click handlers and
+  // producing a stars flicker. '' = not-yet-rendered; 'pre-sunrise', 'day',
+  // 'rating', 'rated' = stable phases.
+  let _lastPhase = '';
+
   function update() {
     const now = new Date();
     const todayDate = today.date; // 'YYYY-MM-DD'
@@ -723,8 +734,10 @@ function startCountdown(today) {
       target = sunsetTime; label = 'שקיעה בעוד'; icon = 'sunset';
     } else {
       // After sunset — show rating widget if not yet rated
-      const todayDate = today.date;
       const alreadyRated = hasRatedToday(todayDate);
+      const phase = alreadyRated ? 'rated' : 'rating';
+      if (phase === _lastPhase) return; // already rendered — leave DOM + handlers untouched
+      _lastPhase = phase;
 
       if (alreadyRated) {
         el.innerHTML = `
@@ -753,6 +766,7 @@ function startCountdown(today) {
           btn.addEventListener('click', () => {
             const r = Number(btn.dataset.rating);
             recordUserRating(todayDate, r);
+            _lastPhase = 'rated';
             el.innerHTML = `
               <div class="countdown-done">
                 <div class="logo-circle-sm">${logoImg('twilight', 16)}</div>
@@ -763,6 +777,7 @@ function startCountdown(today) {
       }
       return;
     }
+    _lastPhase = now < sunriseTime ? 'pre-sunrise' : 'day';
 
     const diff = target - now;
     const hours = Math.floor(diff / 3600000);
@@ -1008,7 +1023,7 @@ function renderCloudChart(hourlyFull) {
       <div class="cloud-chart-bar-wrap">
         <div class="cloud-chart-bar" style="background:linear-gradient(to left, ${gradientStops})">
           ${markers.map(m => `
-            <div class="cloud-chart-marker" style="right:${m.pos}%">
+            <div class="cloud-chart-marker" style="inset-inline-start:${m.pos}%">
               <span>${m.label}</span>
             </div>
           `).join('')}
@@ -1499,8 +1514,18 @@ function attachMainEvents() {
 
     fab.addEventListener('click', () => {
       haptic('medium');
+      // Re-verify at click time — sunsetMs was captured at initMainScreen
+      // time, but the user may leave the tab open past sunset, in which
+      // case the alert window is meaningless.
       const triggerAt = new Date(sunsetMs - 30 * 60 * 1000);
-      const key       = `${today.date}-sunset-30`;
+      if (triggerAt.getTime() <= Date.now()) {
+        fab.hidden = true;
+        window.dispatchEvent(new CustomEvent('twilight:toast', {
+          detail: { msg: 'הזמן כבר עבר — אין מה להתריע', type: 'error' }
+        }));
+        return;
+      }
+      const key = `${today.date}-sunset-30`;
       scheduleAlert(key, triggerAt, 'שקיעה בעוד 30 דקות', today.score, today.date);
       fab.hidden = true;
       window.dispatchEvent(new CustomEvent('twilight:toast', {
