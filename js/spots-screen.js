@@ -9,7 +9,7 @@ import { scoreToSkyBg, scoreToBarStyle, scoreToSkyColor, scoreToLabel, distKm, a
 import { showToast, showLoading, logoImg, esc, getCardBgLuma } from './ui.js';
 import { haptic } from './nav.js';
 import { decide } from './engine/decisionEngine.js';
-import { fetchSpotImage, invalidateSpotImage } from './spotImages.js';
+import { fetchSpotImage, invalidateSpotImage, pickGenericSunset, rejectSpotImageUrl, getStaticMapForSpot } from './spotImages.js';
 import { initLocationSearch } from './locationSearch.js';
 
 let _spots        = [];
@@ -1520,25 +1520,32 @@ function _loadSpotPhoto(i) {
   if (!spot) return;
   container.dataset.loaded = 'pending';
   fetchSpotImage(spot).then(result => {
-    if (!result || !result.url) {
-      container.dataset.loaded = 'fail';
-      container.classList.add('spot-photo-empty');
-      return;
-    }
+    // Hard guarantee: never an empty container. fetchSpotImage already
+    // returns a generic sunset on miss, but defend in depth in case it ever
+    // resolves null (e.g., spot missing coords).
+    if (!result || !result.url) result = pickGenericSunset(spot);
     container.dataset.loaded = 'ok';
     _renderSpotPhotoResult(container, spot, result, i);
   }).catch(() => {
-    container.dataset.loaded = 'fail';
-    container.classList.add('spot-photo-empty');
+    // Network/JS exception → still render the generic sunset, never empty.
+    const result = pickGenericSunset(spot);
+    container.dataset.loaded = 'ok';
+    _renderSpotPhotoResult(container, spot, result, i);
   });
 }
 
 function _renderSpotPhotoResult(container, spot, result, i) {
+  // Stash the latest descriptor so global handlers (onerror, thumbs-down,
+  // map toggle) can read fallback URLs without a closure.
+  container._spotPhotoResult = result;
+  container._spotPhotoSpot   = spot;
+
   const credit = result.credit ? esc(result.credit).slice(0, 60) : '';
   const page   = result.pageUrl || result.url;
   const label  = result.sourceLabel || '';
-  const isStaticMap = !!result._isStaticMap;
-  const isFallback  = !!result._isFallback;
+  const isStaticMap     = !!result._isStaticMap;
+  const isFallback      = !!result._isFallback;
+  const isGenericSunset = !!result._isGenericSunset;
 
   // Static map → render OSM tile mosaic + sunset-direction arrow + retry button.
   if (isStaticMap) {
@@ -1591,6 +1598,33 @@ function _renderSpotPhotoResult(container, spot, result, i) {
     return;
   }
 
+  // Curated generic sunset from the local pool.
+  if (isGenericSunset) {
+    container.classList.add('spot-photo-generic');
+    const creditTxt = credit ? `תמונת אווירה — ${credit}` : 'תמונת אווירה כללית';
+    const wrapStart = page
+      ? `<a href="${page}" target="_blank" rel="noopener" class="spot-photo-link">`
+      : `<div class="spot-photo-link">`;
+    const wrapEnd = page ? `</a>` : `</div>`;
+    container.innerHTML = `
+      ${wrapStart}
+        <img src="${result.url}" alt="${esc(spot.name)}" loading="lazy" decoding="async" width="640" height="360"
+          onerror="window._handleImgError(${i}, this)">
+        <div class="spot-photo-credit">${creditTxt}</div>
+      ${wrapEnd}
+      <div class="spot-photo-actions">
+        <button class="spot-photo-btn" onclick="event.stopPropagation();window._showSpotMap(${i})" title="הצג מפה">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+          מפה
+        </button>
+        <button class="spot-photo-btn" onclick="event.stopPropagation();window._retrySpotPhoto(${i})" title="חפש תמונה אחרת">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          חפש תמונה
+        </button>
+      </div>`;
+    return;
+  }
+
   // Real photo from Wikimedia/etc.
   // Honest UX: when the result came from a wide-area / lenient source,
   // tell the user it's a representative image of the area, not the spot itself.
@@ -1599,9 +1633,12 @@ function _renderSpotPhotoResult(container, spot, result, i) {
   container.innerHTML = `
     <a href="${page}" target="_blank" rel="noopener" class="spot-photo-link">
       <img src="${result.url}" alt="${esc(spot.name)}" loading="lazy" decoding="async" width="640" height="360"
-        onerror="this.onerror=null;this.parentNode.parentNode.classList.add('spot-photo-empty');this.parentNode.remove();">
+        onerror="window._handleImgError(${i}, this)">
       <div class="spot-photo-credit">${prefix}: ${label}${credit ? ' — ' + credit : ''}</div>
-    </a>`;
+    </a>
+    <button class="spot-photo-thumbs" onclick="event.stopPropagation();window._rejectSpotPhoto(${i})" title="התמונה לא טובה">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zM17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg>
+    </button>`;
 }
 
 function _azDirLabel(az) {
@@ -1625,7 +1662,7 @@ window._retrySpotPhoto = function(i) {
   if (!container) return;
   // Reset and re-trigger load
   container.dataset.loaded = '';
-  container.classList.remove('spot-photo-empty', 'spot-photo-staticmap');
+  container.classList.remove('spot-photo-empty', 'spot-photo-staticmap', 'spot-photo-generic');
   container.innerHTML = `
     <div class="spot-photo-skeleton">
       <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
@@ -1635,6 +1672,71 @@ window._retrySpotPhoto = function(i) {
     </div>`;
   haptic('light');
   _loadSpotPhoto(i);
+};
+
+// Hard-fail recovery: an <img> failed to load (404, CORS, network blip).
+// Strategy:
+//  1. If failing image was from the curated pool → walk its _poolFallbacks.
+//  2. Otherwise → mark URL rejected so we don't pick it again, swap to a
+//     generic sunset (instant, local, always works).
+// Guarantees: never an empty container.
+window._handleImgError = function(i, imgEl) {
+  if (!imgEl) return;
+  imgEl.onerror = null;
+  const container = document.getElementById(`spot-photo-${i}`);
+  if (!container) return;
+  const result = container._spotPhotoResult;
+  const spot   = container._spotPhotoSpot;
+
+  // Walk through pool fallbacks in place — no re-render needed.
+  if (result?._isGenericSunset && result._poolFallbacks?.length) {
+    const next = result._poolFallbacks.shift();
+    imgEl.onerror = () => window._handleImgError(i, imgEl);
+    imgEl.src = next;
+    return;
+  }
+
+  // Real-photo failure → blacklist URL and swap to generic sunset.
+  if (spot && imgEl.src) {
+    try { rejectSpotImageUrl(spot, imgEl.src); } catch (_) {}
+  }
+  if (spot) {
+    const fallback = pickGenericSunset(spot);
+    container.dataset.loaded = 'ok';
+    _renderSpotPhotoResult(container, spot, fallback, i);
+  } else {
+    // No spot context (defensive) → just hide the broken image.
+    imgEl.remove();
+    container.classList.add('spot-photo-empty');
+  }
+};
+
+// User said "this image isn't good" → blacklist + reload.
+window._rejectSpotPhoto = function(i) {
+  const sorted = getFilteredSpots();
+  const spot = sorted[i];
+  const container = document.getElementById(`spot-photo-${i}`);
+  if (!spot || !container) return;
+  const result = container._spotPhotoResult;
+  if (result?.url) {
+    try { rejectSpotImageUrl(spot, result.url); } catch (_) {}
+  }
+  haptic('light');
+  // _retrySpotPhoto will call fetchSpotImage → which respects the rejected list.
+  window._retrySpotPhoto(i);
+};
+
+// User wants to see where the spot is → swap card to static-map view.
+window._showSpotMap = function(i) {
+  const sorted = getFilteredSpots();
+  const spot = sorted[i];
+  const container = document.getElementById(`spot-photo-${i}`);
+  if (!spot || !container) return;
+  const map = getStaticMapForSpot(spot);
+  if (!map) return;
+  container.classList.remove('spot-photo-generic');
+  haptic('light');
+  _renderSpotPhotoResult(container, spot, map, i);
 };
 window._toggleFav = function(i) {
   const sorted = getFilteredSpots();

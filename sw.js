@@ -8,7 +8,7 @@
 //   node -e "const f='sw.js',d=new Date().toISOString().slice(0,10).replace(/-/g,''); \
 //            require('fs').writeFileSync(f, require('fs').readFileSync(f,'utf8') \
 //            .replace(/BUILD_DATE = '\d+'/, \"BUILD_DATE = '\" + d + \"'\"))"
-const BUILD_DATE  = '20260416c'; // YYYYMMDD[suffix] — update per deploy
+const BUILD_DATE  = '20260416d'; // YYYYMMDD[suffix] — update per deploy
 const CACHE_NAME  = 'twl-v' + BUILD_DATE; // auto-namespaces cache per deploy
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 800;         // ~12MB at ~15KB/vector tile — better cache hit rate for region
@@ -30,6 +30,21 @@ const STATIC_ASSETS = [
   './images/fallback-viewpoint.svg',
   './images/fallback-cliff.svg',
   './images/fallback-beach.svg',
+  // Curated generic-sunset pool — precached so it works offline as the
+  // default photo fallback. Missing files are tolerated (Promise.allSettled).
+  './images/sunset-pool/credits.json',
+  './images/sunset-pool/beach-1.jpg',
+  './images/sunset-pool/beach-2.jpg',
+  './images/sunset-pool/peak-1.jpg',
+  './images/sunset-pool/peak-2.jpg',
+  './images/sunset-pool/desert-1.jpg',
+  './images/sunset-pool/desert-2.jpg',
+  './images/sunset-pool/forest-1.jpg',
+  './images/sunset-pool/forest-2.jpg',
+  './images/sunset-pool/urban-1.jpg',
+  './images/sunset-pool/urban-2.jpg',
+  './images/sunset-pool/generic-1.jpg',
+  './images/sunset-pool/generic-2.jpg',
   './js/app.js',
   './js/config.js',
   './js/utils.js',

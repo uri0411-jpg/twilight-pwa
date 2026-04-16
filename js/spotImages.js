@@ -61,44 +61,116 @@ function fetchT(url, ms = FETCH_TIMEOUT) {
 
 // ─── Main entry point ────────────────────────────────────────
 /**
- * Resolve a photo for a spot. Returns { url, credit, sourceLabel, pageUrl, _isStaticMap?, _isFallback? }
+ * Resolve a photo for a spot. Returns:
+ *   { url, credit, sourceLabel, pageUrl, score?, alternates?,
+ *     _isStaticMap?, _isFallback?, _isGenericSunset?, _isAreaPhoto?, _poolKey? }
  * Cached by coordinate. Safe to call repeatedly.
+ *
+ * Pipeline:
+ *   1. Cache hit (with rejected-URL filter applied) → return.
+ *   2. Direct OSM image= tag → return.
+ *   3. Cached miss → skip network, go straight to generic sunset.
+ *   4. Parallel fan-out → top-3 candidates cached as alternates.
+ *   5. Nothing real found → curated generic sunset (NOT static map).
+ *
+ * The static map is now an opt-in alternative (UI button), not the default.
  */
 export async function fetchSpotImage(spot) {
   if (!spot || typeof spot.lat !== 'number' || typeof spot.lon !== 'number') return null;
 
   const key = spotCacheKey(spot);
+  const rejected = getRejectedUrls(spot);
 
-  // 1. Cache hit (fresh photo) — return immediately.
+  // 1. Cache hit (fresh photo) — return immediately, but only if not user-rejected.
   const cached = getCache(key);
-  if (cached && !cached._miss) return cached;
+  if (cached && !cached._miss) {
+    const next = pickFromCachedWithAlternates(cached, rejected);
+    if (next) return next;
+    // Every cached candidate has been rejected — fall through to re-fetch.
+  }
 
   // 2. Direct OSM image= tag — instant, no network, very high confidence.
   const direct = tryDirectImageTag(spot);
-  if (direct) {
+  if (direct && !rejected.has(direct.url)) {
     setCache(key, direct, CACHE_TTL_HIT_MIN);
     return direct;
   }
 
-  // 3. Cached miss — go straight to static map (no network).
-  if (cached && cached._miss) return tryStaticMap(spot);
+  // 3. Cached miss — go straight to generic sunset (no network).
+  if (cached && cached._miss) return pickGenericSunset(spot);
 
   // 4. Parallel fan-out across all sources within global budget.
-  let result = null;
+  let bundle = null;
   try {
-    result = await raceForBest(spot, GLOBAL_BUDGET_MS);
+    bundle = await raceForBest(spot, GLOBAL_BUDGET_MS, rejected);
   } catch (e) {
     console.warn('[spotImages] fan-out failed:', e);
   }
 
-  if (result) {
-    setCache(key, result, CACHE_TTL_HIT_MIN);
-    return result;
+  if (bundle && bundle.best) {
+    const stored = { ...bundle.best, alternates: bundle.alternates };
+    setCache(key, stored, CACHE_TTL_HIT_MIN);
+    return stored;
   }
 
-  // 5. Nothing real found — short-cache the miss and return a real static map.
+  // 5. Nothing real found — short-cache the miss and serve the curated sunset pool.
   setCache(key, { _miss: true }, CACHE_TTL_MISS_MIN);
+  return pickGenericSunset(spot);
+}
+
+/**
+ * If the cached entry has alternates, return the first whose URL is not in
+ * the rejected set. Returns null if every option has been rejected.
+ */
+function pickFromCachedWithAlternates(cached, rejected) {
+  if (!rejected || rejected.size === 0) return cached;
+  const candidates = [cached, ...(cached.alternates || [])];
+  for (const c of candidates) {
+    if (c && c.url && !rejected.has(c.url)) {
+      // Re-attach the alternates list (minus the chosen one) for further cycling.
+      const rest = candidates.filter(x => x !== c).map(x => ({ ...x, alternates: undefined }));
+      return { ...c, alternates: rest };
+    }
+  }
+  return null;
+}
+
+/**
+ * Get the static map for a spot — exposed so the UI can show it on demand
+ * (e.g., when the user clicks "🗺️ הצג מפה"). NOT used as automatic fallback.
+ */
+export function getStaticMapForSpot(spot) {
+  if (!spot) return null;
   return tryStaticMap(spot);
+}
+
+// ─── Rejected URLs (per-spot blacklist) ──────────────────────
+/** localStorage key for a spot's rejected-URL list */
+function rejectedKey(spot) {
+  return `twl_rejected_${spotCacheKey(spot)}`;
+}
+
+/** Return the set of URLs the user (or onerror) has marked as bad for this spot */
+export function getRejectedUrls(spot) {
+  try {
+    const raw = localStorage.getItem(rejectedKey(spot));
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Add a URL to the spot's rejected list. Caps at 30 entries (LRU). */
+export function rejectSpotImageUrl(spot, url) {
+  if (!spot || !url) return;
+  try {
+    const set = getRejectedUrls(spot);
+    set.add(url);
+    const arr = Array.from(set).slice(-30);
+    localStorage.setItem(rejectedKey(spot), JSON.stringify(arr));
+  } catch (_) { /* noop */ }
 }
 
 /** Cache key for a spot — v4 prefix to invalidate v3 misses from old strict pipeline */
@@ -124,7 +196,7 @@ export function invalidateSpotImage(spot) {
  */
 const EARLY_RETURN_SCORE = 12; // featured/quality with strong landscape signal
 
-async function raceForBest(spot, budgetMs) {
+async function raceForBest(spot, budgetMs, rejected = new Set()) {
   // High-priority lane: trusted sources tied directly to this spot.
   // If one of these returns, it is almost certainly the right photo.
   // Wikipedia-by-name covers spots without OSM wikipedia/wikidata tags,
@@ -160,11 +232,16 @@ async function raceForBest(spot, budgetMs) {
       if (resolved) return;
       resolved = true;
       clearTimeout(budgetTimer);
-      // Pick best by score
-      const best = collected
-        .filter(c => c && c.url)
-        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
-      resolve(best || null);
+      // Filter rejected URLs, dedupe by URL, sort by score, take top-3.
+      const seen = new Set();
+      const ranked = collected
+        .filter(c => c && c.url && !rejected.has(c.url))
+        .filter(c => { if (seen.has(c.url)) return false; seen.add(c.url); return true; })
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      if (!ranked.length) return resolve(null);
+      const best = ranked[0];
+      const alternates = ranked.slice(1, 3); // top-3 total (best + 2 alternates)
+      resolve({ best, alternates });
     }
 
     let pending = all.length;
@@ -188,7 +265,9 @@ async function raceForBest(spot, budgetMs) {
     function maybeEarlyReturn() {
       // Once trusted lane has fully settled, bail out if we already have a strong candidate
       if (trustedSettled >= trusted.length) {
-        const best = collected.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+        const best = collected
+          .filter(c => !rejected.has(c.url))
+          .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
         if (best && (best.score ?? 0) >= EARLY_RETURN_SCORE) finalize();
       }
     }
@@ -229,8 +308,13 @@ function scoreCandidate(page, { lenient = false } = {}) {
 
   let score = 0;
 
+  // Sunset/sunrise keywords get a strong boost: a real twilight photo should
+  // always beat a generic landscape for our use-case (a twilight forecast app).
+  const SUNSET_KEYWORDS = ['sunset', 'sunrise', 'שקיעה', 'זריחה', 'golden hour', 'dusk', 'twilight', 'dawn'];
   for (const kw of LANDSCAPE_KEYWORDS) {
-    if (text.includes(kw.toLowerCase())) score += 1;
+    if (text.includes(kw.toLowerCase())) {
+      score += SUNSET_KEYWORDS.includes(kw) ? 3 : 1;
+    }
   }
   for (const kw of NEGATIVE_KEYWORDS) {
     if (text.includes(kw)) score -= 1;
@@ -249,8 +333,10 @@ function scoreCandidate(page, { lenient = false } = {}) {
   if (mp > 5) score += 2;
   else if (mp > 2) score += 1;
 
+  // Aspect ratio: cards are 16:9 — portrait images look terrible cropped.
   const ratio = w / h;
-  if (ratio > 1.3) score += 2;
+  if (ratio < 0.9) score -= 15;        // portrait → strongly penalize
+  else if (ratio > 1.3) score += 2;
   else if (ratio > 1.0) score += 1;
 
   if (lenient && score < 0) score = -10; // weak candidate, but real photo
@@ -731,4 +817,100 @@ export function getOfflineFallback(spot) {
     pageUrl: null,
     _isFallback: true,
   };
+}
+
+// ─── Curated generic-sunset pool ─────────────────────────────
+// Local images at images/sunset-pool/. Selected deterministically per spot so
+// the same spot always shows the same generic. Categories chosen by spot.type
+// + coordinate heuristics (Israel-specific). Every category has 2 images so
+// nearby spots don't collide on the same picture.
+
+const SUNSET_POOL_CATEGORIES = ['beach', 'peak', 'desert', 'forest', 'urban', 'generic'];
+const SUNSET_POOL_PATH = './images/sunset-pool/';
+let _sunsetCreditsCache = null; // promise
+
+async function loadSunsetCredits() {
+  if (_sunsetCreditsCache) return _sunsetCreditsCache;
+  _sunsetCreditsCache = fetch(`${SUNSET_POOL_PATH}credits.json`)
+    .then(r => r.ok ? r.json() : {})
+    .catch(() => ({}));
+  return _sunsetCreditsCache;
+}
+
+/**
+ * Map a spot to a sunset-pool category.
+ * Type takes precedence; otherwise we use Israel-coordinate heuristics:
+ *   lat < 31.0      → desert (Negev)
+ *   lon < 34.95     → beach (Mediterranean coast)
+ *   lat > 32.7      → forest (Galilee)
+ *   else            → generic
+ */
+function categoryForSpot(spot) {
+  const t = spot?.type;
+  if (t === 'beach') return 'beach';
+  if (t === 'peak')  return 'peak';
+  if (t === 'cliff') return 'beach'; // cliffs are usually coastal in IL
+  if (t === 'viewpoint') {
+    // viewpoints fall through to geographic heuristics
+  }
+  const { lat, lon } = spot;
+  if (typeof lat === 'number' && typeof lon === 'number') {
+    if (lat < 31.0)  return 'desert';
+    if (lon < 34.95) return 'beach';
+    if (lat > 32.7)  return 'forest';
+    // Heuristic: dense urban band (Tel Aviv/Jerusalem corridor)
+    if (lat > 31.7 && lat < 32.2 && lon > 34.7 && lon < 35.3) return 'urban';
+  }
+  return 'generic';
+}
+
+/** Tiny deterministic hash → 0 or 1 (which of the two images per category). */
+function poolIndex(spot) {
+  const lat = spot?.lat ?? 0;
+  const lon = spot?.lon ?? 0;
+  // Multiply to spread fractional bits, sum, mod 2.
+  const h = Math.abs(Math.floor(lat * 10000) + Math.floor(lon * 10000));
+  return h % 2;
+}
+
+/**
+ * Returns a curated generic-sunset descriptor for the spot.
+ * Uses a primary (type+region match) and falls back through generic-1/2 to
+ * the cartoon SVG. Deterministic — same spot always picks the same image.
+ *
+ * Returns: { url, credit, sourceLabel, pageUrl, _isGenericSunset, _poolKey, _poolFallbacks }
+ *   _poolFallbacks is an array of alternate URLs the UI can try if the primary
+ *   404s (e.g., that pool image hasn't been downloaded yet).
+ */
+export function pickGenericSunset(spot) {
+  if (!spot) return getOfflineFallback(spot);
+  const cat = categoryForSpot(spot);
+  const idx = poolIndex(spot) + 1; // 1-based
+  const primary = `${cat}-${idx}.jpg`;
+  const sibling = `${cat}-${idx === 1 ? 2 : 1}.jpg`;
+  // Fallback chain: primary → sibling in same cat → generic-1 → generic-2
+  const chain = [primary, sibling, 'generic-1.jpg', 'generic-2.jpg']
+    .filter((v, i, a) => a.indexOf(v) === i);
+
+  const result = {
+    url: SUNSET_POOL_PATH + chain[0],
+    credit: 'תמונת אווירה',
+    sourceLabel: 'תמונת אווירה',
+    pageUrl: null,
+    _isGenericSunset: true,
+    _poolKey: chain[0].replace('.jpg', ''),
+    _poolCategory: cat,
+    _poolFallbacks: chain.slice(1).map(f => SUNSET_POOL_PATH + f),
+  };
+
+  // Asynchronously enrich with credits — UI can re-render when ready.
+  loadSunsetCredits().then(credits => {
+    const c = credits?.[chain[0]];
+    if (c && c.author && c.author !== 'TODO') {
+      result.credit = c.author + (c.license ? ` · ${c.license}` : '');
+      result.pageUrl = c.source && c.source !== 'TODO' ? c.source : null;
+    }
+  }).catch(() => {});
+
+  return result;
 }

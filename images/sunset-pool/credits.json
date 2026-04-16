@@ -1,0 +1,16 @@
+{
+  "_doc": "Per-image credits for the sunset-pool. Each entry maps filename → { author, source, license }. Update when adding/replacing images. The UI shows author + license under the photo when a generic sunset is displayed.",
+
+  "beach-1.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "beach-2.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "peak-1.jpg":    { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "peak-2.jpg":    { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "desert-1.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "desert-2.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "forest-1.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "forest-2.jpg":  { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "urban-1.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "urban-2.jpg":   { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "generic-1.jpg": { "author": "TODO", "source": "TODO", "license": "TODO" },
+  "generic-2.jpg": { "author": "TODO", "source": "TODO", "license": "TODO" }
+}
