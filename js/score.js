@@ -746,6 +746,7 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     humidity:      ssParams.humidity,
     visibility:    ssParams.visibility,
     aqi:           null,
+    aod:           ssParams.aod,
     solarElevation: ssParams.solarElevation,
   });
 
@@ -868,6 +869,7 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
   const _cloudDelta    = cloudDelta(h.cloudcover, ssIdx);
   const _dustRaw       = airQuality && aqSsIdx >= 0 ? Math.round(valAt(airQuality.hourly?.dust,  aqSsIdx, 0)) : 0;
   const _pm10Raw       = airQuality && aqSsIdx >= 0 ? Math.round(valAt(airQuality.hourly?.pm10,  aqSsIdx, 0)) : 0;
+  const _aodRaw        = airQuality && aqSsIdx >= 0 ? (airQuality.hourly?.aerosol_optical_depth?.[aqSsIdx] ?? null) : null;
 
   const windGusts = ssIdx >= 0 ? Math.round(h.windgusts_10m[ssIdx]      || 0)    : 0;
   const dewPoint  = ssIdx >= 0 ? Math.round(h.dewpoint_2m[ssIdx]        || 10)   : 10;
@@ -897,7 +899,7 @@ export function calcDayData(dayIndex, weatherData, airQuality = null, lat = 32, 
     dust: `${_dustRaw} µg`,
     _cloudRaw, _humidityRaw, _visibilityRaw, _windRaw,
     _cloudLowRaw, _cloudMidRaw, _cloudHighRaw,
-    _rainMmRaw, _cloudDelta, _dustRaw, _pm10Raw,
+    _rainMmRaw, _cloudDelta, _dustRaw, _pm10Raw, _aodRaw,
     // Extended: palette + afterglow from sunset scoring
     palette:   ssResult.palette,
     afterglow: ssResult.afterglow,

@@ -424,6 +424,12 @@ async function loadAppData() {
     weekData = calcWeekData(weather, airQ, locSnap.lat, locSnap.lon, westData);
     setState({ weekData });
   }
+
+  // Dust storm awareness toast — shown only when today's dust is elevated and data is fresh
+  if (!weather._isStale && (weekData[0]?._dustRaw ?? 0) > 100) {
+    setTimeout(() => showToast('אבק מוגבר באוויר — עשוי להשפיע על הנוף', 'warn'), 2500);
+  }
+
   const spotAvgScores = calcNearbyAvgScore(null, weekData);
 
   // ── Phase 3: Background ensemble refinement ──

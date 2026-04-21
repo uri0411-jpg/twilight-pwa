@@ -176,6 +176,7 @@ export function computeScattering({
   humidity = null,
   visibility = null,
   aqi = null,
+  aod = null,
   solarElevation = 5,
 }) {
   // ── 1. Normalize raw inputs to 0-1 ─────────────────────────────────────
@@ -243,6 +244,15 @@ export function computeScattering({
   // If no data at all, fall back to moderate turbidity (0.3) — a conservative
   // "we don't know" default that neither inflates nor deflates the score.
   const turbidity = weightSum > 0 ? clamp(turbiditySum / weightSum) : 0.3;
+
+  // AOD reference: direct satellite/model measurement at 550nm (dimensionless).
+  // Stored for validation only — NOT weighted into turbidity to avoid
+  // double-counting dust+visibility already in the composite.
+  // Range: ~0.05 (pristine) to ~2.0 (extreme dust storm). Normalized to 0-1.
+  if (aod != null && !isNaN(aod) && aod >= 0) {
+    const aodNorm = clamp(aod / 2.0);
+    contributions.aodReference = { raw: aod, normalized: aodNorm };
+  }
 
   // ── 3. Mie Intensity ───────────────────────────────────────────────────
   //
@@ -380,6 +390,15 @@ export function getContribution(physicsResult) {
         `w=${entry.weight.toFixed(2)}, contrib=${entry.contribution.toFixed(4)}`
       );
     }
+  }
+
+  if (contributions.aodReference) {
+    const { raw, normalized } = contributions.aodReference;
+    const diffPct = ((normalized - turbidity) / Math.max(turbidity, 0.01) * 100).toFixed(0);
+    lines.push(
+      `AOD (מדוד 550nm): ${raw.toFixed(3)} → norm=${(normalized * 100).toFixed(1)}%`,
+      `  vs turbidity composite: ${(turbidity * 100).toFixed(1)}%  (${diffPct > 0 ? '+' : ''}${diffPct}%)`
+    );
   }
 
   lines.push(

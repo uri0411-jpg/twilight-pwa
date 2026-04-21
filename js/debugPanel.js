@@ -159,6 +159,12 @@ function buildContent(dayData, loc) {
   lines.push(`Visibility: ${dayData._visibilityRaw} km`);
   lines.push(`Wind:       ${dayData._windRaw} km/h`);
   lines.push(`Dust:       ${dayData._dustRaw} µg/m³   PM10: ${dayData._pm10Raw} µg/m³`);
+  if (dayData._aodRaw != null) {
+    const aodNorm  = Math.min(1, dayData._aodRaw / 2.0);
+    const turbidity = dayData.turbidity ?? 0;
+    const diffPct  = Math.round((aodNorm - turbidity) / Math.max(turbidity, 0.01) * 100);
+    lines.push(`AOD (550nm): ${dayData._aodRaw.toFixed(3)}  →  norm ${(aodNorm * 100).toFixed(1)}%  |  turbidity ${(turbidity * 100).toFixed(1)}%  (${diffPct >= 0 ? '+' : ''}${diffPct}%)`);
+  }
 
   return lines.join('\n');
 }
