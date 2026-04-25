@@ -61,6 +61,7 @@ const STATIC_ASSETS = [
   './js/spots-screen.js',
   './js/spots/storage.js',
   './js/spots/geo.js',
+  './js/spots/quality.js',
   './js/spotImages.js',
   './js/settings-screen.js',
   './js/learning-screen.js',
