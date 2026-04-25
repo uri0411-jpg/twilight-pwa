@@ -20,7 +20,7 @@ import { LEARNING_KEY, LEARNING_SCHEMA_VERSION, EVENT_TYPES }  from '../config.j
 
 // ─── Constants ────────────────────────────────
 const MAX_ENTRIES         = 90;
-const MIN_ACTIVE_SAMPLES  = 10;
+export const MIN_ACTIVE_SAMPLES  = 10;
 const MIN_BELL_SAMPLES    = 15;
 const ADJ_CACHE_TTL       = 1000;
 

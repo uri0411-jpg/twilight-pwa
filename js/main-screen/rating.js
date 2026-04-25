@@ -11,6 +11,7 @@ import { recordUserRating, hasRatedEvent } from '../calibration.js';
 import { recordRatingForStreak } from '../streak.js';
 import { haptic } from '../nav.js';
 import { EVENT_LABELS_HE, EVENT_LABELS_HE_SHORT, RATING_WINDOWS_MIN, DUSK_OFFSET_MIN } from '../config.js';
+import { getLearningStats, MIN_ACTIVE_SAMPLES } from '../engine/learningEngine.js';
 
 let _countdownInterval = null;
 
@@ -124,18 +125,18 @@ export function startCountdown(today) {
     if (active.length > 0) {
       el.innerHTML = `<div class="rating-stack">${active.map(_ratingCardHTML).join('')}</div>`;
       el.querySelectorAll('.rating-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           const ev = btn.dataset.event;
           const r  = Number(btn.dataset.rating);
           const cb = el.querySelector(`#rating-confidence-${ev}`);
           const conf = cb ? (cb.checked ? 1 : 0) : 1;
-          recordUserRating(todayDate, ev, r, conf);
+          await recordUserRating(todayDate, ev, r, conf);
           haptic?.();
           const streak = recordRatingForStreak(todayDate);
           // Replace the just-rated card with a thank-you state in place
           const card = el.querySelector(`.rating-card[data-event="${ev}"]`);
+          const evLabel = EVENT_LABELS_HE_SHORT[ev] || ev;
           if (card) {
-            const evLabel = EVENT_LABELS_HE_SHORT[ev] || ev;
             const streakNote = streak.unlocked === 'streak3'  ? ' • רצף 3 ימים!'
                             : streak.unlocked === 'streak7'  ? ' • רצף שבועי!'
                             : streak.unlocked === 'streak30' ? ' • חודש שלם — צייד שמיים!'
@@ -145,6 +146,15 @@ export function startCountdown(today) {
                 <span>דירגת את ${evLabel} ${r}/10 — תודה!${streakNote}</span>
               </div>`;
           }
+          // Toast: how many more ratings until the per-event learning gate opens
+          const eventCount = getLearningStats().samplesByEvent?.[ev] ?? 0;
+          const remaining  = MIN_ACTIVE_SAMPLES - eventCount;
+          const msg = remaining <= 0
+            ? 'דירוג נשמר'
+            : remaining === 1
+              ? `דירוג נשמר — עוד דירוג ${evLabel} אחד עד שהמערכת תתחיל ללמוד`
+              : `דירוג נשמר — עוד ${remaining} דירוגי ${evLabel} עד שהמערכת תתחיל ללמוד`;
+          window.dispatchEvent(new CustomEvent('twilight-toast', { detail: { msg, type: 'info' }}));
           _lastSig = ''; // force re-evaluate next tick (more events may still be open)
         });
       });
