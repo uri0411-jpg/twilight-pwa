@@ -8,7 +8,7 @@
 //   node -e "const f='sw.js',d=new Date().toISOString().slice(0,10).replace(/-/g,''); \
 //            require('fs').writeFileSync(f, require('fs').readFileSync(f,'utf8') \
 //            .replace(/BUILD_DATE = '\d+'/, \"BUILD_DATE = '\" + d + \"'\"))"
-const BUILD_DATE  = '20260426'; // YYYYMMDD — update per deploy
+const BUILD_DATE  = '20260427'; // YYYYMMDD — update per deploy
 const CACHE_NAME  = 'twl-v' + BUILD_DATE; // auto-namespaces cache per deploy
 const TILE_CACHE  = 'twl-tiles'; // persistent across deploys — managed by MAX_TILES
 const MAX_TILES   = 800;         // ~12MB at ~15KB/vector tile — better cache hit rate for region
@@ -59,7 +59,6 @@ const STATIC_ASSETS = [
   './js/main-screen/explainer.js',
   './js/main-screen/charts.js',
   './js/main-screen/sky-renderer.js',
-  './js/sky-debug.js',
   './js/spots-screen.js',
   './js/spots/storage.js',
   './js/spots/geo.js',

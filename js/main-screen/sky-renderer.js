@@ -21,7 +21,6 @@ import { renderSkyCanvas, removeSkyCanvas } from '../render/skyCanvas.js';
 import { renderNightSky, removeNightSky } from '../render/nightSky.js';
 import { getSkyMaskSync, getSkyMaskDimensions } from '../render/skyMask.js';
 import { getState, isStale } from '../store.js';
-import { skyDebugTick } from '../sky-debug.js';
 
 let _stopLiveGradient = null;     // active cleanup fn while a gradient is running
 let _nightSkyVisible = false;     // hysteresis flag to prevent flicker near threshold
@@ -261,14 +260,8 @@ export function startSkyGradient(today, loc, locGen, getSpotAvgScores) {
   function update() {
     // ── Location/state gate ──────────────────────────────────────────────────
     const state = getState();
-    if (!state.locationResolved || !state.loc) {
-      skyDebugTick({ liveElevDeg: null, nf: null, displayScore, locProvided: loc?.lat, locResolved: state.locationResolved, isReady, bgFilter: '(bailed: locationResolved/state.loc)' });
-      return;
-    }
-    if (locGen !== undefined && isStale(locGen)) {
-      skyDebugTick({ liveElevDeg: null, nf: null, displayScore, locProvided: loc?.lat, locResolved: state.locationResolved, isReady, bgFilter: '(bailed: isStale)' });
-      return;
-    }
+    if (!state.locationResolved || !state.loc) return;
+    if (locGen !== undefined && isStale(locGen)) return; // location changed → loop dead
 
     // ── State computation (pure, no try-catch) ─────────────────────────────
     let liveSkyColors  = today.skyColors ?? null;
@@ -352,10 +345,7 @@ export function startSkyGradient(today, loc, locGen, getSpotAvgScores) {
     // Each render stage is wrapped in its own try/catch so a failure in one
     // (e.g. nightSky) does not block others (skyCanvas, sunDisk, rays).
     // Each canvas render uses offscreen commit (Contract 3) so no partial frames.
-    if (!isReady) {
-      skyDebugTick({ liveElevDeg, nf, displayScore, locProvided: loc?.lat, locResolved: state.locationResolved, isReady, bgFilter: '(bailed: !isReady)' });
-      return;
-    }
+    if (!isReady) return; // canvas not laid out yet — skip render
 
     // Stage 1: Background filter
     try {
@@ -467,13 +457,6 @@ export function startSkyGradient(today, loc, locGen, getSpotAvgScores) {
         }
       }
     }
-
-    // TEMP DEBUG — remove after diagnosis
-    skyDebugTick({
-      liveElevDeg, nf, displayScore,
-      locProvided: loc?.lat, locResolved: state.locationResolved, isReady,
-      bgFilter: document.querySelector('.bg-sunset')?.style.filter || '(no bgEl)',
-    });
   }
 
   // State-based readiness gate: poll rAF until sky-layers has valid dimensions.
